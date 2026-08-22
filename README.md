@@ -1,4 +1,4 @@
-# 🎓 Smart Attend — Intelligent Biometric & AI Attendance System
+# 🎓 Smart Attend — Intelligent Biometric & Attendance System
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109%2B-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-18-61DAFB.svg?logo=react&logoColor=black)](https://reactjs.org/)
