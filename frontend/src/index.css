@@ -1,0 +1,113 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    overflow-x: hidden;
+    width: 100%;
+  }
+  
+  h1, h2, h3, h4, h5, h6, .font-heading {
+    font-family: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif;
+    letter-spacing: -0.02em;
+  }
+
+  body {
+    @apply bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 antialiased selection:bg-teal-500/20 selection:text-teal-800 dark:selection:bg-teal-500/30 dark:selection:text-teal-200 font-sans;
+    overflow-x: hidden;
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* ──── Shimmer Animation ──── */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* ──── Radar Sweep (QR Scanner HUD) ──── */
+@keyframes radar-sweep {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.animate-radar {
+  animation: radar-sweep 4s linear infinite;
+}
+
+/* ──── Pulse Ring (Session Active Indicator) ──── */
+@keyframes pulseRing {
+  0% { transform: scale(0.8); opacity: 0.5; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+.pulse-ring {
+  animation: pulseRing 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+}
+
+/* ──── QR Scanner Line ──── */
+@keyframes scan {
+  0% { top: 0%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
+/* ──── Shake Animation (Action prompt on click) ──── */
+@keyframes headShake {
+  0% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(5px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(2px); }
+  100% { transform: translateX(0); }
+}
+.animate-shake {
+  animation: headShake 0.4s ease-in-out;
+}
+
+/* ──── Design System: Card Elevation ──── */
+.card-elevation {
+  @apply bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg transition-all duration-200;
+}
+.card-elevation:hover {
+  @apply shadow-md shadow-slate-200/60 dark:shadow-slate-950/40;
+}
+
+/* ──── Design System: Glass Panels ──── */
+.glass-panel {
+  @apply bg-white/95 dark:bg-slate-900/90 backdrop-blur-md border border-slate-200/90 dark:border-slate-800/80 shadow-xl rounded-xl;
+}
+
+.glass-card {
+  @apply bg-slate-50/90 dark:bg-slate-800/60 backdrop-blur-sm border border-slate-200/80 dark:border-slate-700/50 rounded-xl transition-all duration-200 hover:border-slate-300 dark:hover:border-slate-600/80;
+}
+
+/* ──── Design System: Status Badges ──── */
+.badge-eligible {
+  @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-teal-600/10 text-teal-700 dark:text-teal-400 border border-teal-600/20 font-heading;
+}
+.badge-warning {
+  @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-600/10 text-amber-700 dark:text-amber-400 border border-amber-600/20 font-heading;
+}
+.badge-detained {
+  @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-red-600/10 text-red-700 dark:text-red-400 border border-red-600/20 font-heading;
+}
+
+/* ──── Custom Scrollbars ──── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-slate-100 dark:bg-slate-900;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-300 dark:bg-slate-700 rounded-full;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-400 dark:bg-slate-600;
+}
