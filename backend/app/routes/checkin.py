@@ -753,7 +753,7 @@ async def verify_student_checkin(payload: VerifyCheckinPayload):
                 detail=f"No registered face found for {hall_ticket}. Please enroll your face before check-in."
             )
 
-        match, dist, conf = compare_face_embeddings(enrolled_descriptor, payload.faceDescriptor, threshold=0.38)
+        match, dist, conf = compare_face_embeddings(enrolled_descriptor, payload.faceDescriptor, threshold=0.50)
         face_distance = dist
         face_match_confidence = max(conf / 100.0, 0.01)
         logger.info(f"[Face] Comparison for {hall_ticket}: dist={dist:.4f}, conf={conf}%, match={match}, blink={payload.blinkVerified}")

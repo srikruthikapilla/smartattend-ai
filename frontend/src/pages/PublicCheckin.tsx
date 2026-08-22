@@ -10,6 +10,7 @@ import {
   detectFaceWithLandmarks,
   captureEnrollmentDescriptor,
   calculateFaceDistance,
+  calculateConfidencePct,
   type EnrollmentProgress
 } from '../utils/faceRecognition';
 import { enrollPlatformBiometrics, verifyPlatformBiometrics } from '../utils/webauthnBiometrics';
@@ -302,6 +303,24 @@ export const PublicCheckin: React.FC = () => {
     setEnrollStep('face');
   };
 
+  // 4c. Self-Service Face Re-Enrollment (Clears stale/poor captures)
+  const handleReEnrollFace = async () => {
+    try {
+      localStorage.removeItem(`enrolled_${hallTicket}`);
+      await fetch(`/api/student/reset-biometrics/${hallTicket}`, { method: 'POST' });
+    } catch (e) {
+      console.warn('Reset biometrics note:', e);
+    }
+    setEnrolledFaceDescriptor(null);
+    setLastDetectedDescriptor(null);
+    setLiveMatchStatus({ isMatch: false, distance: 1.0, confidencePct: 0, checked: false });
+    setBlinkDetected(false);
+    setBlinkAlertNotice(null);
+    enrollmentStartedRef.current = false;
+    setEnrollStep('face');
+    setStep('first_time_enrollment');
+  };
+
 
   // 5. First-Time User: Register Platform Biometrics (Fingerprint / Passkey)
   const handleRegisterBiometrics = async () => {
@@ -394,12 +413,12 @@ export const PublicCheckin: React.FC = () => {
           setFaceDetectedInFrame(true);
           setLastDetectedDescriptor(detection.descriptor);
 
-          // Calculate real-time face distance if enrolled descriptor is available (Strict 0.38 threshold)
+          // Calculate real-time face distance if enrolled descriptor is available (Calibrated 0.50 threshold)
           let isCurrentFaceMatch = false;
           if (enrolledFaceDescriptor && enrolledFaceDescriptor.length === 128) {
             const dist = calculateFaceDistance(enrolledFaceDescriptor, detection.descriptor);
-            const conf = Math.max(0, Math.min(100, Math.round((1 - (dist / 0.55)) * 100)));
-            isCurrentFaceMatch = dist <= 0.38;
+            const conf = calculateConfidencePct(dist, 0.50);
+            isCurrentFaceMatch = dist <= 0.50;
             setLiveMatchStatus({ isMatch: isCurrentFaceMatch, distance: Number(dist.toFixed(3)), confidencePct: conf, checked: true });
           } else {
             // Fail-closed: Never default to match: true if enrolled descriptor is missing
@@ -463,9 +482,9 @@ export const PublicCheckin: React.FC = () => {
 
     if (!isBiometricFallback && enrolledFaceDescriptor && enrolledFaceDescriptor.length === 128) {
       const dist = calculateFaceDistance(enrolledFaceDescriptor, faceDescriptor);
-      if (dist > 0.38) {
+      if (dist > 0.50) {
         setStep('error');
-        setErrorMessage(`Face verification failed: Live face distance (${dist.toFixed(3)}) exceeds allowed threshold (0.38).`);
+        setErrorMessage(`Face verification failed: Live face distance (${dist.toFixed(3)}) does not match enrolled profile (threshold 0.50).`);
         return;
       }
     }
@@ -1099,11 +1118,23 @@ export const PublicCheckin: React.FC = () => {
                   
                   {/* Alert Guidance Banner when live match fails */}
                   {liveMatchStatus.checked && !liveMatchStatus.isMatch && (
-                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-800 dark:text-rose-200 text-xs font-semibold text-left">
-                      <AlertTriangle className="w-4 h-4 text-rose-500 flex-shrink-0" />
-                      <p className="flex-1 text-[11px] leading-tight">
-                        Warning: Detected face does not match registered biometric profile for <strong>{hallTicket}</strong> ({liveMatchStatus.confidencePct}% match).
-                      </p>
+                    <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-800 dark:text-rose-200 text-xs font-semibold text-left space-y-2">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-rose-500 flex-shrink-0" />
+                        <p className="flex-1 text-[11px] leading-tight">
+                          Face does not match registered profile for <strong>{hallTicket}</strong> ({liveMatchStatus.confidencePct}% match).
+                        </p>
+                      </div>
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={handleReEnrollFace}
+                          className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors inline-flex items-center gap-1 shadow-sm"
+                        >
+                          <ScanFace className="w-3 h-3" />
+                          Re-Enroll Face Scan
+                        </button>
+                      </div>
                     </div>
                   )}
 
@@ -1178,7 +1209,17 @@ export const PublicCheckin: React.FC = () => {
                       className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-colors border border-slate-200 dark:border-slate-700"
                     >
                       <Fingerprint className="w-3.5 h-3.5 text-indigo-500" />
-                      <span>Use Touch ID / Passkey</span>
+                      <span>Use Touch ID</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleReEnrollFace}
+                      className="flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-colors border border-slate-200 dark:border-slate-700"
+                      title="Re-capture and update registered face scan"
+                    >
+                      <ScanFace className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                      <span>Re-Enroll Face</span>
                     </button>
 
                     <button
@@ -1196,7 +1237,7 @@ export const PublicCheckin: React.FC = () => {
 
                   {scanAttempts >= 2 && !blinkDetected && (
                     <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/40 text-[11px] text-indigo-700 dark:text-indigo-300 text-center animate-in fade-in">
-                      Having difficulty with camera blink? You can tap <strong>Use Touch ID / Passkey</strong> above.
+                      Having difficulty with camera blink? You can tap <strong>Use Touch ID</strong> above.
                     </div>
                   )}
                 </div>

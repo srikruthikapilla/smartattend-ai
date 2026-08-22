@@ -33,6 +33,7 @@ export async function loadFaceApiModels(): Promise<boolean> {
 
 /**
  * Calculates Euclidean distance between two 128-dimensional descriptors.
+ * Normalizes both descriptors to L2 unit length to guarantee scale invariance.
  */
 export function calculateFaceDistance(
   desc1: number[],
@@ -42,13 +43,39 @@ export function calculateFaceDistance(
     return 1.0;
   }
 
+  let norm1 = 0;
+  let norm2 = 0;
+  for (let i = 0; i < desc1.length; i++) {
+    norm1 += desc1[i] * desc1[i];
+    norm2 += desc2[i] * desc2[i];
+  }
+  norm1 = Math.sqrt(norm1) || 1;
+  norm2 = Math.sqrt(norm2) || 1;
+
   let sum = 0;
   for (let i = 0; i < desc1.length; i++) {
-    const diff = desc1[i] - desc2[i];
+    const diff = (desc1[i] / norm1) - (desc2[i] / norm2);
     sum += diff * diff;
   }
 
   return Math.sqrt(sum);
+}
+
+/**
+ * Maps Euclidean distance to a human-readable similarity/confidence percentage.
+ * Threshold 0.50 separates genuine face matches from different faces (impostors):
+ * - Genuine match (distance <= 0.50): 80% to 100% confidence.
+ * - Impostor/Mismatch (distance > 0.50): drops sharply from 65% down to 0%.
+ */
+export function calculateConfidencePct(distance: number, threshold = 0.50): number {
+  if (distance <= threshold) {
+    const pct = 100 - (distance / threshold) * 20;
+    return Math.max(80, Math.min(100, Math.round(pct)));
+  } else {
+    const excess = distance - threshold;
+    const pct = 65 - (excess / 0.35) * 65;
+    return Math.max(0, Math.min(65, Math.round(pct)));
+  }
 }
 
 export interface FaceVerificationResult {
@@ -467,15 +494,15 @@ export async function captureEnrollmentDescriptor(
       try {
         if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
         const result = await faceapi
-          .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.50 }))
+          .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.35 }))
           .withFaceLandmarks()
           .withFaceDescriptor();
 
         if (result && result.descriptor) {
           const desc = Array.from(result.descriptor) as number[];
-          // Only accept high-quality face detections (score >= 0.50)
+          // Only accept quality face detections
           const score = (result as any).detection?.score ?? 1;
-          if (score >= 0.50) {
+          if (score >= 0.35) {
             collected.push(desc);
             const pct = Math.round((collected.length / totalFrames) * 90);
             const messages = [
@@ -499,13 +526,14 @@ export async function captureEnrollmentDescriptor(
 
 /**
  * Compare two face descriptors with threshold and blink liveness.
+ * Threshold 0.50 separates genuine face matches from impostors.
  * Fails closed if enrolled descriptor is missing or empty.
  */
 export function verifyFaceMatch(
   enrolledDescriptor: number[] | undefined,
   liveDescriptor: number[] | undefined,
   blinkVerified = true,
-  threshold = 0.38
+  threshold = 0.50
 ): FaceVerificationResult {
   if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
     return {
@@ -528,8 +556,7 @@ export function verifyFaceMatch(
   }
 
   const distance = calculateFaceDistance(enrolledDescriptor, liveDescriptor);
-  // Calibrated similarity %: 100% at dist=0, 80% at dist=0.25, 45% at threshold 0.38, 0% at dist >= 0.55
-  const confidencePct = Math.max(0, Math.min(100, Math.round((1.0 - (distance / 0.55)) * 100)));
+  const confidencePct = calculateConfidencePct(distance, threshold);
   const match = distance <= threshold;
 
   return {

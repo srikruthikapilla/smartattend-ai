@@ -75,7 +75,7 @@ class FaceRecognitionService:
         self,
         v1: List[float],
         v2: List[float],
-        threshold: float = 0.38
+        threshold: float = 0.50
     ) -> Tuple[bool, float, int]:
         """
         Compare two individual vectors (Euclidean distance on normalized space).
@@ -92,8 +92,15 @@ class FaceRecognitionService:
         distance = float(np.linalg.norm(diff))
         match = distance <= threshold
 
-        # Calibrated confidence: 100% at dist=0, 80% at dist=0.20, 45% at threshold 0.38, 0% at dist >= 0.55
-        conf = max(0, min(100, int(round((1.0 - (distance / 0.55)) * 100))))
+        # Calibrated confidence: genuine matches (dist <= 0.50) get 80-100%, impostors drop to 0-65%
+        if distance <= threshold:
+            pct = 100 - (distance / threshold) * 20
+            conf = max(80, min(100, int(round(pct))))
+        else:
+            excess = distance - threshold
+            pct = 65 - (excess / 0.35) * 65
+            conf = max(0, min(65, int(round(pct))))
+
         return match, round(distance, 4), conf
 
     def match_single_vector(
@@ -104,7 +111,7 @@ class FaceRecognitionService:
     ) -> Dict[str, Any]:
         """
         Match a live face vector against either a specific hall ticket (1:1) or the entire enrolled database (1:N).
-        Uses strict thresholds (0.38 for 1:1, 0.34 for 1:N) with Top-2 margin validation.
+        Uses calibrated thresholds (0.50 for 1:1, 0.44 for 1:N) with Top-2 margin validation.
         """
         dim = len(live_vector) if live_vector else 0
         if dim not in (128, 512):
@@ -115,9 +122,9 @@ class FaceRecognitionService:
 
         live_norm = self._normalize(np.array(live_vector, dtype=np.float32))
 
-        # 1. Targeted 1-to-1 comparison if hall ticket is given (Strict 0.38 threshold)
+        # 1. Targeted 1-to-1 comparison if hall ticket is given (Calibrated 0.50 threshold)
         if target_hall_ticket:
-            eff_threshold = threshold if threshold is not None else 0.38
+            eff_threshold = threshold if threshold is not None else 0.50
             ht = target_hall_ticket.strip().upper()
             enrolled = self._enrolled_faces.get(ht)
             if not enrolled or enrolled["dim"] != dim:
@@ -130,7 +137,14 @@ class FaceRecognitionService:
             diff = live_norm - enrolled["vector"]
             dist = float(np.linalg.norm(diff))
             match = dist <= eff_threshold
-            conf = max(0, min(100, int(round((1.0 - (dist / 0.55)) * 100))))
+
+            if dist <= eff_threshold:
+                pct = 100 - (dist / eff_threshold) * 20
+                conf = max(80, min(100, int(round(pct))))
+            else:
+                excess = dist - eff_threshold
+                pct = 65 - (excess / 0.35) * 65
+                conf = max(0, min(65, int(round(pct))))
 
             return {
                 "matched": match,

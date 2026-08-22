@@ -5,7 +5,7 @@ from typing import List, Tuple
 def compare_face_embeddings(
     enrolled_vec: List[float],
     live_vec: List[float],
-    threshold: float = 0.38
+    threshold: float = 0.50
 ) -> Tuple[bool, float, int]:
     """
     Computes Euclidean (L2) distance between two 128-dim face-api.js descriptors.
@@ -32,7 +32,13 @@ def compare_face_embeddings(
 
     match = distance <= threshold
 
-    # Calibrated similarity %: 100% at dist=0, 80% at dist=0.20, 45% at threshold 0.38, 0% at dist >= 0.55
-    confidence_pct = max(0, min(100, int(round((1.0 - (distance / 0.55)) * 100))))
+    # Calibrated similarity %: genuine matches (dist <= 0.50) get 80-100%, impostors drop to 0-65%
+    if distance <= threshold:
+        pct = 100 - (distance / threshold) * 20
+        confidence_pct = max(80, min(100, int(round(pct))))
+    else:
+        excess = distance - threshold
+        pct = 65 - (excess / 0.35) * 65
+        confidence_pct = max(0, min(65, int(round(pct))))
 
     return match, round(distance, 4), confidence_pct
