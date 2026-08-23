@@ -110,7 +110,17 @@ export const QRScannerModal: React.FC<QRScannerModalProps> = ({ isOpen, onClose 
         return;
       }
 
+      if (detection.multipleFaces) {
+        setFaceDetected(true);
+        setStatusState({
+          type: 'error',
+          message: `Multiple faces detected (${detection.faceCount} people). Please ensure only you are visible to the camera.`
+        });
+        return;
+      }
+
       setFaceDetected(true);
+
 
       // Process real-time eye aspect ratio & blink transitions
       const blinkRes = blinkDetectorRef.current.processFrame(detection.landmarks);

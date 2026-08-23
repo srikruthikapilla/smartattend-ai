@@ -79,6 +79,8 @@ export const PublicCheckin: React.FC = () => {
   const [blinkDetected, setBlinkDetected] = useState<boolean>(false);
   const [blinkProgress, setBlinkProgress] = useState<number>(0);
   const [faceDetectedInFrame, setFaceDetectedInFrame] = useState<boolean>(false);
+  const [multipleFacesDetected, setMultipleFacesDetected] = useState<boolean>(false);
+  const [detectedFaceCount, setDetectedFaceCount] = useState<number>(0);
   const [lastDetectedDescriptor, setLastDetectedDescriptor] = useState<number[] | null>(null);
   const [verifiedRecord, setVerifiedRecord] = useState<any>(null);
   const [blinkAlertNotice, setBlinkAlertNotice] = useState<string | null>(null);
@@ -98,6 +100,8 @@ export const PublicCheckin: React.FC = () => {
     setBlinkDetected(false);
     setBlinkProgress(0);
     setFaceDetectedInFrame(false);
+    setMultipleFacesDetected(false);
+    setDetectedFaceCount(0);
     setLastDetectedDescriptor(null);
     setLivenessStatus('Position your face inside the frame');
     setVerifiedRecord(null);
@@ -109,6 +113,7 @@ export const PublicCheckin: React.FC = () => {
       blinkDetectorRef.current.reset();
     }
   };
+
 
   // Attendance Checker State
   const [checkHallTicket, setCheckHallTicket] = useState<string>('');
@@ -303,23 +308,6 @@ export const PublicCheckin: React.FC = () => {
     setEnrollStep('face');
   };
 
-  // 4c. Self-Service Face Re-Enrollment (Clears stale/poor captures)
-  const handleReEnrollFace = async () => {
-    try {
-      localStorage.removeItem(`enrolled_${hallTicket}`);
-      await fetch(`/api/student/reset-biometrics/${hallTicket}`, { method: 'POST' });
-    } catch (e) {
-      console.warn('Reset biometrics note:', e);
-    }
-    setEnrolledFaceDescriptor(null);
-    setLastDetectedDescriptor(null);
-    setLiveMatchStatus({ isMatch: false, distance: 1.0, confidencePct: 0, checked: false });
-    setBlinkDetected(false);
-    setBlinkAlertNotice(null);
-    enrollmentStartedRef.current = false;
-    setEnrollStep('face');
-    setStep('first_time_enrollment');
-  };
 
 
   // 5. First-Time User: Register Platform Biometrics (Fingerprint / Passkey)
@@ -409,16 +397,28 @@ export const PublicCheckin: React.FC = () => {
       try {
         const detection = await detectFaceWithLandmarks(video);
 
-        if (detection) {
+        if (detection?.multipleFaces) {
+          setFaceDetectedInFrame(true);
+          setMultipleFacesDetected(true);
+          setDetectedFaceCount(detection.faceCount || 2);
+          setLivenessStatus(`⚠️ Multiple faces detected (${detection.faceCount || 2} people). Only 1 student must be in view.`);
+          setLiveMatchStatus({ isMatch: false, distance: 1.0, confidencePct: 0, checked: false });
+          return;
+        }
+
+        setMultipleFacesDetected(false);
+        setDetectedFaceCount(detection ? 1 : 0);
+
+        if (detection && detection.descriptor && detection.descriptor.length === 128) {
           setFaceDetectedInFrame(true);
           setLastDetectedDescriptor(detection.descriptor);
 
-          // Calculate real-time face distance if enrolled descriptor is available (Calibrated 0.50 threshold)
+          // Calculate real-time face distance if enrolled descriptor is available (Calibrated 0.30 threshold)
           let isCurrentFaceMatch = false;
           if (enrolledFaceDescriptor && enrolledFaceDescriptor.length === 128) {
             const dist = calculateFaceDistance(enrolledFaceDescriptor, detection.descriptor);
-            const conf = calculateConfidencePct(dist, 0.50);
-            isCurrentFaceMatch = dist <= 0.50;
+            const conf = calculateConfidencePct(dist, 0.30);
+            isCurrentFaceMatch = dist <= 0.30;
             setLiveMatchStatus({ isMatch: isCurrentFaceMatch, distance: Number(dist.toFixed(3)), confidencePct: conf, checked: true });
           } else {
             // Fail-closed: Never default to match: true if enrolled descriptor is missing
@@ -429,7 +429,8 @@ export const PublicCheckin: React.FC = () => {
             const { hasBlinked, isClosed, progressPct } = detector.processFrame(detection.landmarks);
             setBlinkProgress(progressPct);
 
-            if (hasBlinked || detector.blinkCount > 0) {
+            // Only trigger on the specific frame that completes a blink (hasBlinked is now per-frame, not permanent)
+            if (hasBlinked) {
               setBlinkDetected(true);
               
               // STRICT GATE: Must be a verified face match before recording attendance
@@ -441,13 +442,15 @@ export const PublicCheckin: React.FC = () => {
                 handleFinalVerification(detection.descriptor, true);
                 return;
               } else {
-                setBlinkAlertNotice('Face does not match registered profile. Liveness confirmed, but identity verification failed.');
-                setLivenessStatus('Face mismatch: Live face does not match registered profile for Roll No.');
-                setIsShakeActive(true);
-                setTimeout(() => setIsShakeActive(false), 800);
+                // DIRECTLY transition to error screen with face mismatch message
+                submitted = true;
+                clearInterval(interval);
+                setStep('error');
+                setErrorMessage(`Face Verification Failed: The live face does not match the registered biometric profile for Roll No. ${hallTicket} (Similarity: ${liveMatchStatus.confidencePct}% | Required: ≥ 80%).`);
+                return;
               }
             } else if (isClosed) {
-              setLivenessStatus(isCurrentFaceMatch ? 'Blink detected — reopen eyes to complete' : 'Face mismatch — look directly into the camera');
+              setLivenessStatus(isCurrentFaceMatch ? 'Blink detected — reopen eyes to complete' : 'Face mismatch — live face does not match enrolled profile');
             } else {
               setLivenessStatus(isCurrentFaceMatch ? 'Face verified — blink naturally once to confirm' : 'Face mismatch — live face does not match enrolled profile');
             }
@@ -480,11 +483,19 @@ export const PublicCheckin: React.FC = () => {
       return;
     }
 
-    if (!isBiometricFallback && enrolledFaceDescriptor && enrolledFaceDescriptor.length === 128) {
-      const dist = calculateFaceDistance(enrolledFaceDescriptor, faceDescriptor);
-      if (dist > 0.50) {
+    if (!isBiometricFallback) {
+      // HARD-FAIL: Never skip face verification — reject if enrolled descriptor is missing
+      if (!enrolledFaceDescriptor || enrolledFaceDescriptor.length !== 128) {
         setStep('error');
-        setErrorMessage(`Face verification failed: Live face distance (${dist.toFixed(3)}) does not match enrolled profile (threshold 0.50).`);
+        setErrorMessage(`Could not load biometric profile for ${hallTicket}. Please re-enroll your face.`);
+        return;
+      }
+
+      const dist = calculateFaceDistance(enrolledFaceDescriptor, faceDescriptor);
+      if (dist > 0.30) {
+        const conf = calculateConfidencePct(dist, 0.30);
+        setStep('error');
+        setErrorMessage(`Face Verification Failed: The live face (similarity: ${conf}%) does not match the registered biometrics for Roll No. ${hallTicket}. Please ensure the correct enrolled student is in front of the camera with good lighting.`);
         return;
       }
     }
@@ -534,6 +545,7 @@ export const PublicCheckin: React.FC = () => {
       setErrorMessage(err.message || 'Unable to connect to verification server. Please try again.');
     }
   };
+
 
   // 9. Hardware Biometric Fallback
   const handleBiometricFallback = async () => {
@@ -1033,7 +1045,12 @@ export const PublicCheckin: React.FC = () => {
                     <span className="font-mono font-bold text-slate-800 dark:text-slate-200">{hallTicket}</span>
                   </div>
 
-                  {liveMatchStatus.checked && (
+                  {multipleFacesDetected ? (
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30 font-bold text-[11px] animate-pulse">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-500" />
+                      <span>Multiple Faces ({detectedFaceCount}) — Blocked</span>
+                    </div>
+                  ) : liveMatchStatus.checked ? (
                     <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border font-bold text-[11px] ${
                       liveMatchStatus.isMatch
                         ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
@@ -1042,19 +1059,24 @@ export const PublicCheckin: React.FC = () => {
                       <span className={`w-2 h-2 rounded-full ${liveMatchStatus.isMatch ? 'bg-emerald-500' : 'bg-rose-500 animate-ping'}`} />
                       <span>{liveMatchStatus.isMatch ? `Face Matched (${liveMatchStatus.confidencePct}%) ✓` : `⚠️ Mismatch (${liveMatchStatus.confidencePct}% Match)`}</span>
                     </div>
-                  )}
+                  ) : null}
 
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold text-[11px]">
-                    {liveMatchStatus.checked && !liveMatchStatus.isMatch ? (
+                    {multipleFacesDetected ? (
                       <>
                         <span className="w-2 h-2 rounded-full bg-rose-500" />
-                        <span className="text-rose-600 dark:text-rose-400">2. Mismatch (Blocked)</span>
+                        <span className="text-rose-600 dark:text-rose-400">1 Person Only</span>
+                      </>
+                    ) : liveMatchStatus.checked && !liveMatchStatus.isMatch ? (
+                      <>
+                        <span className="w-2 h-2 rounded-full bg-rose-500" />
+                        <span className="text-rose-600 dark:text-rose-400">Identity Mismatch</span>
                       </>
                     ) : (
                       <>
                         <span className={`w-2 h-2 rounded-full ${blinkDetected ? 'bg-emerald-500' : faceDetectedInFrame ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'}`} />
                         <span className={blinkDetected ? 'text-emerald-700 dark:text-emerald-300' : faceDetectedInFrame ? 'text-amber-700 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'}>
-                          {blinkDetected ? '2. Blink Verified ✓' : '2. Blink Check'}
+                          {blinkDetected ? 'Blink Verified ✓' : 'Blink Check'}
                         </span>
                       </>
                     )}
@@ -1076,7 +1098,9 @@ export const PublicCheckin: React.FC = () => {
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                     <div
                       className={`w-48 h-60 rounded-[64px] border-2 transition-all duration-300 ${
-                        liveMatchStatus.checked && !liveMatchStatus.isMatch
+                        multipleFacesDetected
+                          ? 'border-rose-500 shadow-[0_0_24px_rgba(244,63,94,0.7)] scale-[1.02]'
+                          : liveMatchStatus.checked && !liveMatchStatus.isMatch
                           ? 'border-rose-500 shadow-[0_0_22px_rgba(244,63,94,0.6)] scale-[1.01]'
                           : blinkDetected
                           ? 'border-emerald-400 shadow-[0_0_20px_rgba(52,211,153,0.5)] scale-[1.03]'
@@ -1093,10 +1117,12 @@ export const PublicCheckin: React.FC = () => {
                   <div className="absolute bottom-3 left-3 right-3 bg-slate-950/85 backdrop-blur-md rounded-xl p-2 text-white text-xs font-semibold shadow-md space-y-1">
                     <div className="flex items-center justify-between px-1">
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <Eye className={`w-3.5 h-3.5 flex-shrink-0 ${liveMatchStatus.checked && !liveMatchStatus.isMatch ? 'text-rose-400' : blinkDetected ? 'text-emerald-400' : 'text-amber-400 animate-pulse'}`} />
+                        <Eye className={`w-3.5 h-3.5 flex-shrink-0 ${multipleFacesDetected || (liveMatchStatus.checked && !liveMatchStatus.isMatch) ? 'text-rose-400' : blinkDetected ? 'text-emerald-400' : 'text-amber-400 animate-pulse'}`} />
                         <span className="truncate text-[11px]">
-                          {liveMatchStatus.checked && !liveMatchStatus.isMatch
-                            ? '⚠️ Different face detected — not registered user'
+                          {multipleFacesDetected
+                            ? `⚠️ Multiple faces (${detectedFaceCount}) — only 1 allowed`
+                            : liveMatchStatus.checked && !liveMatchStatus.isMatch
+                            ? `⚠️ Face Mismatch (${liveMatchStatus.confidencePct}% match)`
                             : livenessStatus}
                         </span>
                       </div>
@@ -1106,7 +1132,7 @@ export const PublicCheckin: React.FC = () => {
                     {/* Progress Track */}
                     <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
                       <div
-                        className={`h-full transition-all duration-300 ${liveMatchStatus.checked && !liveMatchStatus.isMatch ? 'bg-rose-500' : blinkDetected ? 'bg-emerald-500' : 'bg-gradient-to-r from-amber-500 to-emerald-500'}`}
+                        className={`h-full transition-all duration-300 ${multipleFacesDetected || (liveMatchStatus.checked && !liveMatchStatus.isMatch) ? 'bg-rose-500' : blinkDetected ? 'bg-emerald-500' : 'bg-gradient-to-r from-amber-500 to-emerald-500'}`}
                         style={{ width: `${blinkProgress}%` }}
                       ></div>
                     </div>
@@ -1116,37 +1142,56 @@ export const PublicCheckin: React.FC = () => {
                 {/* Primary Action Button & Visual Feedback Area */}
                 <div className={`space-y-2 pt-1 ${isShakeActive ? 'animate-shake' : ''}`}>
                   
-                  {/* Alert Guidance Banner when live match fails */}
-                  {liveMatchStatus.checked && !liveMatchStatus.isMatch && (
-                    <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-800 dark:text-rose-200 text-xs font-semibold text-left space-y-2">
+                  {/* Multi-Face Warning Banner */}
+                  {multipleFacesDetected && (
+                    <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-800 dark:text-rose-200 text-xs font-semibold text-left space-y-1">
                       <div className="flex items-center gap-2">
                         <AlertTriangle className="w-4 h-4 text-rose-500 flex-shrink-0" />
                         <p className="flex-1 text-[11px] leading-tight">
-                          Face does not match registered profile for <strong>{hallTicket}</strong> ({liveMatchStatus.confidencePct}% match).
+                          Multiple faces detected in camera frame ({detectedFaceCount} people). Please ensure only 1 student is in view.
                         </p>
                       </div>
-                      <div className="flex justify-end">
+                    </div>
+                  )}
+
+                  {/* Alert Guidance Banner when live match fails */}
+                  {liveMatchStatus.checked && !liveMatchStatus.isMatch && !multipleFacesDetected && (
+                    <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-800 dark:text-rose-200 text-xs font-semibold text-left space-y-2">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-rose-500 flex-shrink-0 mt-0.5" />
+                        <div className="flex-1 text-[11px] leading-tight space-y-1">
+                          <p className="font-bold text-rose-600 dark:text-rose-400">
+                            Face Verification Failed: Mismatch
+                          </p>
+                          <p className="text-slate-600 dark:text-slate-300">
+                            The live face does not match the registered biometric profile for Roll No. <strong className="font-mono">{hallTicket}</strong> (Similarity: {liveMatchStatus.confidencePct}% | Required: ≥ 80%).
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex justify-end gap-2 pt-1">
                         <button
                           type="button"
-                          onClick={handleReEnrollFace}
+                          onClick={() => {
+                            setStep('error');
+                            setErrorMessage(`Face Verification Failed: The live face does not match the enrolled biometric profile for Roll No. ${hallTicket} (Similarity: ${liveMatchStatus.confidencePct}% | Required: ≥ 80%).`);
+                          }}
                           className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors inline-flex items-center gap-1 shadow-sm"
                         >
-                          <ScanFace className="w-3 h-3" />
-                          Re-Enroll Face Scan
+                          View Failure Details
                         </button>
                       </div>
                     </div>
                   )}
 
                   {/* Alert Guidance Banner when clicked without blink */}
-                  {blinkAlertNotice && !blinkDetected && !liveMatchStatus.checked && (
+                  {blinkAlertNotice && !blinkDetected && !liveMatchStatus.checked && !multipleFacesDetected && (
                     <div className="flex items-center gap-2 p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-800 dark:text-amber-200 text-xs font-semibold text-left">
                       <Eye className="w-4 h-4 text-amber-500 flex-shrink-0 animate-pulse" />
                       <p className="flex-1 text-[11px] leading-tight">{blinkAlertNotice}</p>
                     </div>
                   )}
 
-                  {!faceDetectedInFrame && !blinkAlertNotice && (
+                  {!faceDetectedInFrame && !blinkAlertNotice && !multipleFacesDetected && (
                     <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
                       <AlertCircle className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 flex-shrink-0" />
                       <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">Center your face in the oval for detection</p>
@@ -1155,25 +1200,36 @@ export const PublicCheckin: React.FC = () => {
 
                   <button
                     type="button"
-                    disabled={!faceDetectedInFrame || (liveMatchStatus.checked && !liveMatchStatus.isMatch)}
+                    disabled={!faceDetectedInFrame || multipleFacesDetected}
                     onClick={() => {
+                      if (multipleFacesDetected) {
+                        setBlinkAlertNotice('Multiple faces detected. Please make sure only 1 person is in frame.');
+                        setIsShakeActive(true);
+                        setTimeout(() => setIsShakeActive(false), 450);
+                        return;
+                      }
+
                       if (!faceDetectedInFrame || !lastDetectedDescriptor) {
                         setBlinkAlertNotice('Please position and center your face inside the oval first.');
                         setIsShakeActive(true);
                         setTimeout(() => setIsShakeActive(false), 450);
                         return;
                       }
+
                       if (liveMatchStatus.checked && !liveMatchStatus.isMatch) {
+                        setStep('error');
+                        setErrorMessage(`Face Verification Failed: The live face does not match the registered biometrics for Roll No. ${hallTicket} (Similarity: ${liveMatchStatus.confidencePct}% | Required: ≥ 80%). Please ensure the enrolled student is looking directly at the camera with clear lighting.`);
                         return;
                       }
+
                       setBlinkAlertNotice(null);
                       handleFinalVerification(lastDetectedDescriptor, blinkDetected);
                     }}
                     className={`w-full py-3.5 px-4 rounded-xl font-extrabold text-xs uppercase tracking-wider transition-all shadow-sm flex items-center justify-center gap-2 font-heading ${
-                      !faceDetectedInFrame
+                      !faceDetectedInFrame || multipleFacesDetected
                         ? 'bg-slate-100 dark:bg-slate-800/80 text-slate-400 dark:text-slate-500 border border-slate-200 dark:border-slate-700 cursor-not-allowed'
                         : liveMatchStatus.checked && !liveMatchStatus.isMatch
-                        ? 'bg-rose-500/15 border border-rose-500/30 text-rose-500 dark:text-rose-400 cursor-not-allowed opacity-90'
+                        ? 'bg-rose-600 hover:bg-rose-500 text-white cursor-pointer shadow-rose-500/25 shadow-lg active:scale-[0.98]'
                         : !blinkDetected
                         ? 'bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-300 border-2 border-amber-500/40 shadow-amber-500/10 cursor-pointer active:scale-[0.99]'
                         : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-500/25 shadow-lg active:scale-[0.98]'
@@ -1184,10 +1240,15 @@ export const PublicCheckin: React.FC = () => {
                         <Camera className="w-4 h-4 text-slate-400" />
                         <span>Align Face in Oval</span>
                       </>
-                    ) : liveMatchStatus.checked && !liveMatchStatus.isMatch ? (
+                    ) : multipleFacesDetected ? (
                       <>
                         <AlertTriangle className="w-4 h-4 text-rose-500" />
-                        <span>Face Mismatch — Attendance Blocked</span>
+                        <span>Multiple Faces — 1 Person Allowed</span>
+                      </>
+                    ) : liveMatchStatus.checked && !liveMatchStatus.isMatch ? (
+                      <>
+                        <AlertTriangle className="w-4 h-4 text-white" />
+                        <span>Face Mismatch — Tap to View Failure</span>
                       </>
                     ) : !blinkDetected ? (
                       <>
@@ -1214,21 +1275,11 @@ export const PublicCheckin: React.FC = () => {
 
                     <button
                       type="button"
-                      onClick={handleReEnrollFace}
-                      className="flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-colors border border-slate-200 dark:border-slate-700"
-                      title="Re-capture and update registered face scan"
-                    >
-                      <ScanFace className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
-                      <span>Re-Enroll Face</span>
-                    </button>
-
-                    <button
-                      type="button"
                       onClick={() => {
                         resetAllCheckinState();
                         setStep('hall_ticket_input');
                       }}
-                      className="flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-colors border border-slate-200 dark:border-slate-700"
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-xl transition-colors border border-slate-200 dark:border-slate-700"
                     >
                       <RefreshCw className="w-3.5 h-3.5 text-slate-400" />
                       <span>Change Roll</span>
@@ -1300,18 +1351,35 @@ export const PublicCheckin: React.FC = () => {
               </div>
             )}
 
-            {/* STEP 8: ERROR */}
+            {/* STEP 8: ERROR & FAILURE REPORT */}
             {step === 'error' && (
               <div className="text-center space-y-5">
                 <div className="w-16 h-16 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center justify-center mx-auto">
                   <AlertTriangle className="w-8 h-8" />
                 </div>
                 <div>
-                  <h2 className="text-xl font-bold text-slate-900 dark:text-white font-heading">Check-in Unsuccessful</h2>
-                  <p className="text-xs text-rose-600 dark:text-rose-400 mt-2 leading-relaxed max-w-[340px] mx-auto font-medium">
+                  <h2 className="text-xl font-bold text-slate-900 dark:text-white font-heading">Face Verification Failed</h2>
+                  <p className="text-xs text-rose-600 dark:text-rose-400 mt-2 leading-relaxed max-w-[380px] mx-auto font-medium">
                     {errorMessage}
                   </p>
                 </div>
+
+                {/* Diagnostic Details Box */}
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 text-left text-xs space-y-2">
+                  <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
+                    <span>Target Roll Number:</span>
+                    <span className="font-mono font-bold text-slate-900 dark:text-white">{hallTicket}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
+                    <span>Face Match Requirement:</span>
+                    <span className="font-semibold text-emerald-600 dark:text-emerald-400">≥ 80% Similarity</span>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
+                    <span>Reason:</span>
+                    <span className="font-semibold text-rose-600 dark:text-rose-400">Biometric Template Mismatch</span>
+                  </div>
+                </div>
+
                 <div className="space-y-2.5">
                   <button
                     onClick={() => {
@@ -1327,7 +1395,15 @@ export const PublicCheckin: React.FC = () => {
                     className="w-full bg-slate-900 dark:bg-white hover:bg-slate-800 dark:hover:bg-slate-100 text-white dark:text-slate-900 font-bold py-3.5 px-4 rounded-xl text-xs uppercase tracking-wider transition font-heading flex items-center justify-center gap-2 shadow-sm"
                   >
                     <RefreshCw className="w-4 h-4" />
-                    <span>Retry</span>
+                    <span>Try Face Verification Again</span>
+                  </button>
+
+                  <button
+                    onClick={handleBiometricFallback}
+                    className="w-full bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 font-bold py-2.5 px-3 rounded-xl text-xs uppercase tracking-wider transition font-heading flex items-center justify-center gap-1.5"
+                  >
+                    <Fingerprint className="w-3.5 h-3.5 text-indigo-500" />
+                    <span>Use Touch ID Fallback</span>
                   </button>
 
                   <button
@@ -1344,6 +1420,7 @@ export const PublicCheckin: React.FC = () => {
                 </div>
               </div>
             )}
+
           </div>
         )}
 

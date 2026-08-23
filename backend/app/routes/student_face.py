@@ -73,8 +73,7 @@ def verify_student_ownership(student_id: str, current_user: Dict[str, Any]):
     if (
         user_id.lower() == student_id_lower
         or (user_meta_ht and user_meta_ht == student_id_lower)
-        or (user_email and user_email.startswith(student_id_lower))
-        or (user_email and student_id_lower in user_email)
+        or (user_email and user_email.startswith(student_id_lower + "@"))
     ):
         return
 

@@ -63,17 +63,18 @@ export function calculateFaceDistance(
 
 /**
  * Maps Euclidean distance to a human-readable similarity/confidence percentage.
- * Threshold 0.50 separates genuine face matches from different faces (impostors):
- * - Genuine match (distance <= 0.50): 80% to 100% confidence.
- * - Impostor/Mismatch (distance > 0.50): drops sharply from 65% down to 0%.
+ * Threshold 0.30 separates genuine face matches from different faces (impostors)
+ * on L2-normalized FaceNet-128 embeddings:
+ * - Genuine match (distance <= 0.30): 80% to 100% confidence.
+ * - Impostor/Mismatch (distance > 0.30): drops sharply from 65% down to 0%.
  */
-export function calculateConfidencePct(distance: number, threshold = 0.50): number {
+export function calculateConfidencePct(distance: number, threshold = 0.30): number {
   if (distance <= threshold) {
     const pct = 100 - (distance / threshold) * 20;
     return Math.max(80, Math.min(100, Math.round(pct)));
   } else {
     const excess = distance - threshold;
-    const pct = 65 - (excess / 0.35) * 65;
+    const pct = 65 - (excess / 0.30) * 65;
     return Math.max(0, Math.min(65, Math.round(pct)));
   }
 }
@@ -83,7 +84,18 @@ export interface FaceVerificationResult {
   distance: number;
   confidencePct: number;
   blinkVerified?: boolean;
+  multipleFaces?: boolean;
+  faceCount?: number;
   message: string;
+}
+
+export interface FaceDetectionResult {
+  descriptor: number[];
+  landmarks: any;
+  detection: any;
+  multipleFaces?: boolean;
+  faceCount?: number;
+  isCentered?: boolean;
 }
 
 /**
@@ -264,7 +276,7 @@ export class BlinkDetector {
     }
 
     return {
-      hasBlinked: hasBlinked || this.blinkCount > 0,
+      hasBlinked,  // Only true for the frame that completed a blink, not permanently
       blinkCount: this.blinkCount,
       avgEAR: Number(avgEAR.toFixed(3)),
       isClosed,
@@ -310,35 +322,57 @@ export function generateCanvasFallbackDescriptor(video: HTMLVideoElement): numbe
 
 /**
  * Extract real 128-dimensional face descriptor and landmarks from video element.
+ * Enforces single-face detection to reject background faces and multiple individuals.
  */
 export async function detectFaceWithLandmarks(
   video: HTMLVideoElement
-): Promise<{
-  descriptor: number[];
-  landmarks: any;
-  detection: any;
-} | null> {
+): Promise<FaceDetectionResult | null> {
   try {
     if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return null;
 
-    const result = await faceapi
-      .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.30 }))
+    // Detect all faces in the camera frame
+    const allDetections = await faceapi
+      .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.38 }))
       .withFaceLandmarks()
-      .withFaceDescriptor();
+      .withFaceDescriptors();
 
-    if (result) {
+    if (!allDetections || allDetections.length === 0) {
+      return null;
+    }
+
+    // MULTI-PERSON SECURITY CHECK:
+    // If more than 1 face is visible in frame, flag as multipleFaces to prevent capturing other person
+    if (allDetections.length > 1) {
       return {
-        descriptor: Array.from(result.descriptor),
-        landmarks: result.landmarks,
-        detection: result.detection
+        descriptor: [],
+        landmarks: null,
+        detection: null,
+        multipleFaces: true,
+        faceCount: allDetections.length,
+        isCentered: false
       };
     }
+
+    const singleResult = allDetections[0];
+    const box = singleResult.detection.box;
+    const centerX = box.x + box.width / 2;
+    const vWidth = video.videoWidth || 640;
+    
+    // Check if face is centered (within middle 75% of frame) and of adequate size
+    const isCentered = centerX >= vWidth * 0.12 && centerX <= vWidth * 0.88 && box.width >= 60;
+
+    return {
+      descriptor: Array.from(singleResult.descriptor),
+      landmarks: singleResult.landmarks,
+      detection: singleResult.detection,
+      multipleFaces: false,
+      faceCount: 1,
+      isCentered
+    };
   } catch (err) {
     console.warn("Face detection attempt failed:", err);
   }
 
-  // No face detected — return null instead of fallback noise.
-  // The caller should handle null by showing "No face detected" to the user.
   return null;
 }
 
@@ -379,7 +413,7 @@ export async function generateFaceDescriptor(
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const res = await detectFaceWithLandmarks(video);
-    if (res && res.descriptor) {
+    if (res && res.descriptor && res.descriptor.length === 128 && !res.multipleFaces) {
       return res.descriptor;
     }
     if (attempt < maxAttempts - 1) {
@@ -396,6 +430,7 @@ export interface EnrollmentProgress {
   pct: number;
   status: 'scanning' | 'processing' | 'done' | 'error';
   message: string;
+  multipleFaces?: boolean;
 }
 
 /**
@@ -436,6 +471,7 @@ export function computeMedoidDescriptor(descriptors: number[][]): number[] {
 /**
  * Multi-frame face enrollment: captures high-confidence frames over time
  * and selects the sharpest Medoid biometric template.
+ * Strictly enforces single-face presence to reject frames with other people in the background.
  */
 export async function captureEnrollmentDescriptor(
   video: HTMLVideoElement,
@@ -485,7 +521,7 @@ export async function captureEnrollmentDescriptor(
           onProgress({ framesCollected: collected.length, totalFrames, pct: 100, status: 'done', message: 'Face profile registered!' });
           resolve(template);
         } else {
-          onProgress({ framesCollected: collected.length, totalFrames, pct: 0, status: 'error', message: 'Could not detect your face with sufficient confidence. Please ensure good lighting and face the camera directly.' });
+          onProgress({ framesCollected: collected.length, totalFrames, pct: 0, status: 'error', message: 'Could not detect your face with sufficient confidence. Please ensure good lighting and only one person in frame.' });
           resolve(null);
         }
         return;
@@ -493,29 +529,33 @@ export async function captureEnrollmentDescriptor(
 
       try {
         if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
-        const result = await faceapi
-          .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.35 }))
-          .withFaceLandmarks()
-          .withFaceDescriptor();
+        const res = await detectFaceWithLandmarks(video);
 
-        if (result && result.descriptor) {
-          const desc = Array.from(result.descriptor) as number[];
-          // Only accept quality face detections
-          const score = (result as any).detection?.score ?? 1;
-          if (score >= 0.35) {
-            collected.push(desc);
-            const pct = Math.round((collected.length / totalFrames) * 90);
-            const messages = [
-              'Keep still — scanning your face...',
-              'Hold steady...',
-              'Scanning facial landmarks...',
-              'Almost there — keep looking at camera...',
-              'Great — a few more seconds...',
-              'Perfect — finishing up...',
-            ];
-            const msg = messages[Math.min(collected.length - 1, messages.length - 1)];
-            onProgress({ framesCollected: collected.length, totalFrames, pct, status: 'scanning', message: msg });
-          }
+        if (res?.multipleFaces) {
+          onProgress({
+            framesCollected: collected.length,
+            totalFrames,
+            pct: Math.round((collected.length / totalFrames) * 90),
+            status: 'scanning',
+            message: `⚠️ Multiple faces detected (${res.faceCount} people). Please ensure only you are visible.`,
+            multipleFaces: true
+          });
+          return;
+        }
+
+        if (res && res.descriptor && res.descriptor.length === 128 && res.isCentered !== false) {
+          collected.push(res.descriptor);
+          const pct = Math.round((collected.length / totalFrames) * 90);
+          const messages = [
+            'Keep still — scanning your face...',
+            'Hold steady...',
+            'Scanning facial landmarks...',
+            'Almost there — keep looking at camera...',
+            'Great — a few more seconds...',
+            'Perfect — finishing up...',
+          ];
+          const msg = messages[Math.min(collected.length - 1, messages.length - 1)];
+          onProgress({ framesCollected: collected.length, totalFrames, pct, status: 'scanning', message: msg });
         }
       } catch {
         // Silently retry on frame error
@@ -525,15 +565,15 @@ export async function captureEnrollmentDescriptor(
 }
 
 /**
- * Compare two face descriptors with threshold and blink liveness.
- * Threshold 0.50 separates genuine face matches from impostors.
+ * Compare two face descriptors with strict calibrated threshold and blink liveness.
+ * Threshold 0.45 separates genuine face matches from impostors.
  * Fails closed if enrolled descriptor is missing or empty.
  */
 export function verifyFaceMatch(
   enrolledDescriptor: number[] | undefined,
   liveDescriptor: number[] | undefined,
   blinkVerified = true,
-  threshold = 0.50
+  threshold = 0.30
 ): FaceVerificationResult {
   if (!enrolledDescriptor || enrolledDescriptor.length === 0) {
     return {
@@ -551,7 +591,7 @@ export function verifyFaceMatch(
       distance: 1.0,
       confidencePct: 0,
       blinkVerified: false,
-      message: "Unable to detect a face. Please look into the camera."
+      message: "Unable to detect a face. Please look directly into the camera."
     };
   }
 
@@ -566,6 +606,7 @@ export function verifyFaceMatch(
     blinkVerified,
     message: match
       ? `Face verified (${confidencePct}% confidence)${blinkVerified ? ' with confirmed Eye Blink Liveness.' : '.'}`
-      : `Face mismatch: Live face (${confidencePct}% similarity) does not match enrolled profile.`
+      : `Face mismatch: Live face (${confidencePct}% similarity) does not match enrolled profile for this Roll No.`
   };
 }
+

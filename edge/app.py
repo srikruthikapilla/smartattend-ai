@@ -122,10 +122,19 @@ def verify_face(payload: VerifyFaceRequest):
         )
 
     ref_vec = np.array(ref_vec_list, dtype=np.float32)
+
+    # L2 normalize both vectors for consistent distance computation
+    ref_norm = np.linalg.norm(ref_vec)
+    live_norm = np.linalg.norm(live_vec)
+    if ref_norm > 0:
+        ref_vec = ref_vec / ref_norm
+    if live_norm > 0:
+        live_vec = live_vec / live_norm
+
     diff = ref_vec - live_vec
     distance = float(np.linalg.norm(diff))
     
-    threshold = 0.42
+    threshold = 0.30
     match = distance <= threshold
     confidence_pct = max(0, min(100, int((1.0 - distance) * 100)))
 

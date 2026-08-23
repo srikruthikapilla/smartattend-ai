@@ -426,6 +426,18 @@ def register_student_biometrics(payload: Dict[str, Any] = Body(...)):
     if face_descriptor:
         if not isinstance(face_descriptor, list) or len(face_descriptor) not in (128, 512):
             raise HTTPException(status_code=400, detail="faceDescriptor must be a 128-dimensional or 512-dimensional float list.")
+
+        # SECURITY: Prevent public re-enrollment when a face is already enrolled.
+        # This blocks the attack where Student A types Student B's hall ticket and
+        # overwrites B's enrolled face with A's face.
+        existing_descriptor = _load_enrolled_face_descriptor(ht)
+        if existing_descriptor and isinstance(existing_descriptor, list) and len(existing_descriptor) in (128, 512):
+            logger.warning(f"[Security] Blocked public re-enrollment attempt for {ht} — face already enrolled. Use reset-biometrics first.")
+            raise HTTPException(
+                status_code=409,
+                detail=f"Face biometrics are already enrolled for {ht}. To re-register, use the 'Re-enroll Face' option first or contact your faculty."
+            )
+
         student_face_cache[ht] = {
             "descriptor": face_descriptor,
             "updatedAt": datetime.utcnow().isoformat() + "Z"
@@ -753,7 +765,7 @@ async def verify_student_checkin(payload: VerifyCheckinPayload):
                 detail=f"No registered face found for {hall_ticket}. Please enroll your face before check-in."
             )
 
-        match, dist, conf = compare_face_embeddings(enrolled_descriptor, payload.faceDescriptor, threshold=0.50)
+        match, dist, conf = compare_face_embeddings(enrolled_descriptor, payload.faceDescriptor, threshold=0.30)
         face_distance = dist
         face_match_confidence = max(conf / 100.0, 0.01)
         logger.info(f"[Face] Comparison for {hall_ticket}: dist={dist:.4f}, conf={conf}%, match={match}, blink={payload.blinkVerified}")
@@ -764,6 +776,7 @@ async def verify_student_checkin(payload: VerifyCheckinPayload):
                 status_code=403,
                 detail=f"Face verification rejected: Live face (similarity: {conf}%) does not match registered profile for Roll Number {hall_ticket}."
             )
+
 
         face_verified = True
         verification_method = "face_recognition"
