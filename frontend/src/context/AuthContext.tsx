@@ -1,4 +1,4 @@
-import React, {
+﻿import React, {
   createContext,
   useContext,
   useEffect,
@@ -222,7 +222,7 @@ export const AuthProvider: React.FC<{
 
     const endpoints = [
       '/api/auth/users',
-      'http://localhost:5000/api/auth/users',
+      '/api/auth/users',
       `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/users`
     ].filter(Boolean);
 
@@ -283,7 +283,7 @@ export const AuthProvider: React.FC<{
 
     const backendEndpoints = [
       '/api/auth/login',
-      'http://localhost:5000/api/auth/login',
+      '/api/auth/login',
       `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/login`
     ].filter(Boolean);
 
@@ -347,7 +347,7 @@ export const AuthProvider: React.FC<{
     const cleanEmail = email.trim().toLowerCase();
     const endpoints = [
       '/api/auth/request-reset',
-      'http://localhost:5000/api/auth/request-reset',
+      '/api/auth/request-reset',
       `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/request-reset`
     ].filter(Boolean);
 
@@ -382,7 +382,7 @@ export const AuthProvider: React.FC<{
     const cleanEmail = email.trim().toLowerCase();
     const endpoints = [
       '/api/auth/reset-password',
-      'http://localhost:5000/api/auth/reset-password',
+      '/api/auth/reset-password',
       `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/reset-password`
     ].filter(Boolean);
 
@@ -432,7 +432,7 @@ export const AuthProvider: React.FC<{
     const token = localStorage.getItem('sbit_auth_token');
     const endpoints = [
       '/api/auth/register',
-      'http://localhost:5000/api/auth/register',
+      '/api/auth/register',
       `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/register`
     ].filter(Boolean);
 
@@ -521,7 +521,7 @@ export const AuthProvider: React.FC<{
     const token = localStorage.getItem('sbit_auth_token');
     const endpoints = [
       '/api/auth/register',
-      'http://localhost:5000/api/auth/register',
+      '/api/auth/register',
       `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/register`
     ].filter(Boolean);
 
@@ -868,7 +868,7 @@ export const AuthProvider: React.FC<{
       const token = localStorage.getItem('sbit_auth_token');
       const endpoints = [
         '/api/auth/faculty/bulk',
-        'http://localhost:5000/api/auth/faculty/bulk',
+        '/api/auth/faculty/bulk',
         `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/faculty/bulk`
       ].filter(Boolean);
 
@@ -960,7 +960,7 @@ export const AuthProvider: React.FC<{
     const token = localStorage.getItem('sbit_auth_token');
     const endpoints = [
       `/api/auth/users/${encodeURIComponent(uid)}`,
-      `http://localhost:5000/api/auth/users/${encodeURIComponent(uid)}`,
+      `/api/auth/users/${encodeURIComponent(uid)}`,
       `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/users/${encodeURIComponent(uid)}`
     ].filter(Boolean);
 
@@ -1022,7 +1022,7 @@ export const AuthProvider: React.FC<{
     const token = localStorage.getItem('sbit_auth_token');
     const endpoints = [
       `/api/auth/users/${encodeURIComponent(uid)}`,
-      `http://localhost:5000/api/auth/users/${encodeURIComponent(uid)}`,
+      `/api/auth/users/${encodeURIComponent(uid)}`,
       `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/users/${encodeURIComponent(uid)}`
     ].filter(Boolean);
 
@@ -1390,3 +1390,4 @@ export const useAuth = () => {
   }
   return context;
 };
+

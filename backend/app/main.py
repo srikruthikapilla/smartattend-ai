@@ -1,7 +1,8 @@
 import socketio
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from app.config import CORS_ORIGINS
+from fastapi.responses import JSONResponse
+from app.config import CORS_ORIGINS, NODE_ENV
 from app.routes.health import router as health_router
 from app.routes.student_face import router as student_face_router
 from app.routes.qr_session import router as qr_session_router
@@ -10,7 +11,28 @@ from app.routes.attendance import router as attendance_router, set_sio_server as
 from app.routes.admin import router as admin_router
 from app.routes.auth import router as auth_router
 
-# 1. Initialize Socket.io Async Server
+# ---------------------------------------------------------------------------
+# Rate Limiting (slowapi + Redis)
+# ---------------------------------------------------------------------------
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    from app.config import REDIS_URL
+
+    limiter = Limiter(
+        key_func=get_remote_address,
+        storage_uri=REDIS_URL,
+        default_limits=[]
+    )
+    RATE_LIMITING_ENABLED = True
+except Exception:
+    limiter = None
+    RATE_LIMITING_ENABLED = False
+
+# ---------------------------------------------------------------------------
+# Socket.io
+# ---------------------------------------------------------------------------
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins=CORS_ORIGINS if CORS_ORIGINS else ["http://localhost:3000", "http://localhost:5173"]
@@ -21,20 +43,29 @@ set_attendance_sio(sio)
 
 @sio.event
 async def connect(sid, environ):
-    print(f"🔌 WebSocket Client Connected to Live Attendance Stream: {sid}")
+    print(f"🔌 WebSocket Client Connected: {sid}")
 
 @sio.event
 async def disconnect(sid):
     print(f"❌ WebSocket Client Disconnected: {sid}")
 
-# 2. Initialize FastAPI Application
+# ---------------------------------------------------------------------------
+# FastAPI App — disable interactive docs in production
+# ---------------------------------------------------------------------------
+IS_PRODUCTION = NODE_ENV == "production"
+
 fastapi_app = FastAPI(
     title="Smart Attend — Face & Biometric Attendance Backend",
     description="High-performance async FastAPI backend with native NumPy face embedding matching and real-time WebSockets.",
     version="2.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    docs_url=None if IS_PRODUCTION else "/docs",
+    redoc_url=None if IS_PRODUCTION else "/redoc",
+    openapi_url=None if IS_PRODUCTION else "/openapi.json",
 )
+
+if RATE_LIMITING_ENABLED:
+    fastapi_app.state.limiter = limiter
+    fastapi_app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 fastapi_app.add_middleware(
     CORSMiddleware,
@@ -44,23 +75,26 @@ fastapi_app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------------------------------------------------------------------------
+# Startup
+# ---------------------------------------------------------------------------
 @fastapi_app.on_event("startup")
 async def startup_event():
     """
     Application startup:
-    1. Initialize PostgreSQL — verify connection, create tables, seed geofence.
+    1. Initialize PostgreSQL — verify connection, create tables, seed geofence & bootstrap admin.
     2. Pre-load all enrolled face embeddings from PostgreSQL into the in-memory
        vectorized matching registry.
     """
     from app.database import init_db, get_db_context
     from app.models.db_models import Student
-    from app.services.face_recognition_service import face_service
 
-    # --- Step 1: PostgreSQL init ---
+    # Step 1: PostgreSQL init + admin bootstrap
     init_db()
 
-    # --- Step 2: Pre-load face embeddings from PostgreSQL ---
+    # Step 2: Pre-load face embeddings from PostgreSQL
     try:
+        from app.services.face_recognition_service import face_service
         with get_db_context() as db:
             enrolled_students = (
                 db.query(Student)
@@ -84,7 +118,9 @@ async def startup_event():
     except Exception as e:
         print(f"⚠️ [Face AI] Preload note: {e}")
 
-# 3. Mount Routers
+# ---------------------------------------------------------------------------
+# Routers
+# ---------------------------------------------------------------------------
 fastapi_app.include_router(health_router)
 fastapi_app.include_router(student_face_router)
 fastapi_app.include_router(qr_session_router)
@@ -93,7 +129,9 @@ fastapi_app.include_router(attendance_router)
 fastapi_app.include_router(admin_router)
 fastapi_app.include_router(auth_router)
 
-# 4. Wrap with Socket.io ASGI app
+# ---------------------------------------------------------------------------
+# ASGI wrapper (Socket.io + FastAPI)
+# ---------------------------------------------------------------------------
 app = socketio.ASGIApp(
     socketio_server=sio,
     other_asgi_app=fastapi_app

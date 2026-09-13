@@ -14,7 +14,7 @@ import logging
 from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
@@ -29,6 +29,26 @@ from app.utils.redis_client import set_otp, get_otp, delete_otp
 from app.utils.email_service import send_otp_email
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Rate Limiter (optional — degrades gracefully if slowapi is not installed)
+# ---------------------------------------------------------------------------
+try:
+    from slowapi import Limiter
+    from slowapi.util import get_remote_address
+    _limiter = Limiter(key_func=get_remote_address)
+    _RATE_LIMIT_AVAILABLE = True
+except ImportError:
+    _limiter = None
+    _RATE_LIMIT_AVAILABLE = False
+
+def _rate_limit(limit_string: str):
+    """Decorator factory that applies rate limiting when slowapi is available."""
+    def decorator(func):
+        if _RATE_LIMIT_AVAILABLE and _limiter:
+            return _limiter.limit(limit_string)(func)
+        return func
+    return decorator
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication & Password Management"])
 
@@ -103,7 +123,7 @@ class BulkUpsertRequest(BaseModel):
 class BulkFacultyItem(BaseModel):
     name: str
     email: str
-    password: Optional[str] = "faculty@123"
+    password: Optional[str] = None  # If not provided, a random temporary password is generated
     phone: Optional[str] = None
     department: Optional[str] = "Computer Science & Engineering"
     designation: Optional[str] = "Assistant Professor"
@@ -131,11 +151,18 @@ def get_all_users(
     faculty = db.query(Faculty).all()
     students = db.query(Student).all()
 
-    unified_list = (
-        [a.to_dict() for a in admins] +
-        [f.to_dict() for f in faculty] +
-        [s.to_dict() for s in students]
-    )
+    unified_list = []
+    for a in admins:
+        d = a.to_dict()
+        unified_list.append(d)
+    for f in faculty:
+        d = f.to_dict()
+        unified_list.append(d)
+    for s in students:
+        d = s.to_dict()
+        # Never expose raw biometric vectors in list endpoints
+        d.pop("face_descriptor", None)
+        unified_list.append(d)
 
     return {
         "success": True,
@@ -150,7 +177,8 @@ def get_all_users(
 
 
 @router.post("/login")
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+@_rate_limit("10/minute")
+def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
     """
     Authenticate user against PostgreSQL:
     - Authentication is strictly enabled for Admins and Faculty only.
@@ -185,7 +213,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
             "email": admin.email,
             "name": admin.name,
             "role": "admin",
-            "exp": int(time.time()) + (30 * 24 * 3600)
+            "exp": int(time.time()) + (8 * 3600)  # 8-hour session
         }
         access_token = pyjwt.encode(token_payload, JWT_SECRET, algorithm="HS256")
         return {
@@ -221,7 +249,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
             "email": faculty.email,
             "name": faculty.name,
             "role": "faculty",
-            "exp": int(time.time()) + (30 * 24 * 3600)
+            "exp": int(time.time()) + (8 * 3600)  # 8-hour session
         }
         access_token = pyjwt.encode(token_payload, JWT_SECRET, algorithm="HS256")
         return {
@@ -565,7 +593,14 @@ def bulk_upsert_faculty(
             continue
 
         existing = db.query(Faculty).filter(func.lower(Faculty.email) == clean_email).first()
-        pwd = f.password if f.password else "faculty@123"
+        import secrets
+        import string
+        # Generate a strong random temporary password if none provided
+        if f.password and len(f.password) >= 8:
+            pwd = f.password
+        else:
+            alphabet = string.ascii_letters + string.digits + "@#$!"
+            pwd = ''.join(secrets.choice(alphabet) for _ in range(16))
         pwd_hash = hash_password(pwd)
 
         if existing:
@@ -603,7 +638,8 @@ def bulk_upsert_faculty(
 # ── Password Reset Flow (Faculty & Admin Only, with Redis TTL & Brevo SMTP) ──
 
 @router.post("/request-reset")
-def request_password_reset(payload: RequestResetRequest, db: Session = Depends(get_db)):
+@_rate_limit("3/minute")
+def request_password_reset(request: Request, payload: RequestResetRequest, db: Session = Depends(get_db)):
     """
     Initiate password reset for Faculty or Admin:
     1. Look up user in Admins or Faculty.
@@ -654,7 +690,8 @@ def request_password_reset(payload: RequestResetRequest, db: Session = Depends(g
 
 
 @router.post("/reset-password")
-def reset_password(payload: VerifyAndResetRequest, db: Session = Depends(get_db)):
+@_rate_limit("10/minute")
+def reset_password(request: Request, payload: VerifyAndResetRequest, db: Session = Depends(get_db)):
     """
     Verify 6-digit OTP against Redis and update password in Admins or Faculty table.
     """
@@ -673,10 +710,10 @@ def reset_password(payload: VerifyAndResetRequest, db: Session = Depends(get_db)
             detail="Invalid verification code."
         )
 
-    if len(payload.new_password) < 6:
+    if len(payload.new_password) < 8:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Password must be at least 6 characters long."
+            detail="Password must be at least 8 characters long."
         )
 
     user = (
@@ -708,10 +745,10 @@ def admin_direct_reset(
 ):
     """Administrative direct password override for Faculty or Admin. Requires Admin authorization."""
     clean_email = payload.email.strip().lower()
-    if len(payload.new_password) < 6:
+    if len(payload.new_password) < 8:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Password must be at least 6 characters long."
+            detail="Password must be at least 8 characters long."
         )
 
     user = (

@@ -133,6 +133,12 @@ class Student(Base):
     face_embeddings = relationship("StudentFaceEmbedding", back_populates="student", cascade="all, delete-orphan")
 
     def to_dict(self):
+        """
+        Serialize student for API responses.
+        NOTE: face_descriptor (raw 128/512-D vector), biometric_public_key, and
+        biometric_credential_id are intentionally excluded — they are sensitive
+        biometric data and must only be returned from dedicated biometric endpoints.
+        """
         return {
             "id": str(self.id),
             "email": self.email,
@@ -146,14 +152,11 @@ class Student(Base):
             "section": self.section,
             "year": self.year,
             "semester": self.semester,
-            "face_descriptor": self.face_descriptor,
+            # Enrollment status flags — safe to expose; no raw vectors here
             "face_enrollment_status": self.face_enrollment_status,
             "face_enrolled_at": self.face_enrolled_at.isoformat() if self.face_enrolled_at else None,
-            "biometric_credential_id": self.biometric_credential_id,
-            "biometric_public_key": self.biometric_public_key,
             "biometric_enrollment_status": self.biometric_enrollment_status,
             "biometric_enrolled_at": self.biometric_enrolled_at.isoformat() if self.biometric_enrolled_at else None,
-            "trusted_device_id": self.trusted_device_id,
             "trusted_device_name": self.trusted_device_name,
             "trusted_device_registered_at": (
                 self.trusted_device_registered_at.isoformat() if self.trusted_device_registered_at else None

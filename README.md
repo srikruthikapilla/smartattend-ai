@@ -285,95 +285,101 @@ smartattend-ai/
 
 ### 2. Environment Configuration
 
-Copy the example environment files into their respective directories:
+The system uses a single `.env` file located in the `backend/` directory for local development.
 
-#### Backend (`backend/.env`)
-```env
-PORT=5000
-NODE_ENV=development
-CORS_ORIGIN=http://localhost:3000
-CORS_ORIGINS=http://localhost:3000,http://localhost:5173
-
-# PostgreSQL Connection
-DATABASE_URL=postgresql://postgres:postgrespassword@postgres:5432/smartattend
-
-# Redis Connection
-REDIS_URL=redis://redis:6379/0
-
-# Security Secrets
-JWT_SECRET=your-super-secret-jwt-key-change-in-production
-EDGE_API_KEY=smartattend-edge-default-key
-
-# Brevo SMTP Configuration (for password reset OTP emails)
-BREVO_SMTP_SERVER=smtp-relay.brevo.com
-BREVO_SMTP_PORT=587
-BREVO_SMTP_LOGIN=your-brevo-login-email
-BREVO_SMTP_KEY=your-brevo-smtp-key
-BREVO_FROM_EMAIL=no-reply@yourdomain.com
-BREVO_FROM_NAME=Smart Attend — SBIT
+Copy the example file to create your local `.env`:
+```bash
+cp .env.example backend/.env
 ```
 
-#### Frontend (`frontend/.env`)
-```env
-VITE_API_BASE_URL=http://localhost:5000/api
-```
+Edit `backend/.env` with your secure values. For local development, the defaults are safe to use as-is. **Do not use the default secrets in production.**
 
 ---
 
-### 3. Running with Docker Compose (Recommended)
+### 3. Local Development (Docker Compose)
 
-Start all services with a single command:
+The easiest way to run the entire stack locally is via Docker Compose. Because the `.env` file is located in the `backend/` folder (to keep it close to the API), you **must** pass the `--env-file` flag to Docker Compose.
 
+Start the stack:
 ```bash
-docker compose up -d --build
+docker compose --env-file backend/.env up -d
 ```
+*(If you make changes to the source code, you can rebuild the containers by adding `--build` to the end of the command).*
 
-This starts 4 healthy, auto-restarting containers:
+This starts 4 auto-restarting containers:
 | Container | Port | Description |
 | :--- | :--- | :--- |
 | `smartattend-frontend` | `http://localhost:3000` | Production React App (Nginx) |
-| `smartattend-backend` | `http://localhost:5000` | FastAPI Backend & Socket.IO Server |
-| `smartattend-postgres` | `localhost:5432` | PostgreSQL 16 Database |
-| `smartattend-redis` | `localhost:6379` | Redis 7 In-Memory Cache |
+| `smartattend-backend` | `http://localhost:5000` | FastAPI Backend (Internal Only) |
+| `smartattend-postgres` | `5432` | PostgreSQL 16 Database (Internal Only) |
+| `smartattend-redis` | `6379` | Redis 7 Cache (Internal Only) |
 
-Check status:
-```bash
-docker compose ps
-```
+> **Note on Database Resets:** If you change `POSTGRES_PASSWORD` in your `.env` *after* the database has already been created, PostgreSQL will reject the connection. To fully reset the database and apply the new password, run: `docker compose down -v` followed by the `up` command above.
 
-View logs:
-```bash
-docker compose logs -f backend
-```
+#### Useful Docker Compose Commands
+| Action | Command |
+| :--- | :--- |
+| **Start / Run stack** | `docker compose --env-file backend/.env up -d` |
+| **Build & Run (All)** | `docker compose --env-file backend/.env up -d --build` |
+| **Build & Run Frontend only** | `docker compose --env-file backend/.env up -d --build frontend` |
+| **Build & Run Backend only** | `docker compose --env-file backend/.env up -d --build backend` |
+| **Stop all containers** | `docker compose down` |
+| **Stop and wipe database/data** | `docker compose down -v` |
+| **View logs (All)** | `docker compose logs -f` |
+| **View logs (Backend only)** | `docker compose logs -f backend` |
 
 ---
 
-### 4. Running Locally for Development
+### 4. Running Locally (Without Docker)
 
-If you prefer to run services outside Docker:
+If you prefer to run the services individually without Docker Compose:
 
-#### Start PostgreSQL and Redis locally:
-Ensure PostgreSQL is listening on port 5432 and Redis on 6379.
-
-#### Start Backend:
+**1. Start Backend:**
 ```bash
 cd backend
 python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# Linux/macOS:
-source .venv/bin/activate
-
+source .venv/bin/activate  # (On Windows: .venv\Scripts\activate)
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload
 ```
 
-#### Start Frontend:
+**2. Start Frontend (Node.js):**
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
+
+**3. Build & Run Frontend Standalone (Using Docker Nginx):**
+If you want to test the production build of the frontend in isolation:
+```bash
+cd frontend
+docker build -t smartattend-frontend .
+docker run -d -p 3000:80 smartattend-frontend
+```
+
+---
+
+### 5. Production Deployment (Coolify)
+
+Smart Attend is optimized for 1-click deployment on **Coolify**.
+
+1. Connect your GitHub repository to Coolify.
+2. Select **Docker Compose** as the build pack.
+3. In the Coolify **Environment Variables** UI, you **must** set the following variables (do not use a `.env` file in Coolify):
+
+   ```env
+   NODE_ENV=production
+   POSTGRES_PASSWORD=<your-secure-db-password>
+   JWT_SECRET=<your-secure-jwt-secret>
+   EDGE_API_KEY=<your-secure-edge-key>
+   ADMIN_EMAIL=admin@sbit.ac.in
+   ADMIN_PASSWORD=<your-secure-admin-password>
+   ```
+
+   *Note: If `NODE_ENV=production` is set, the backend will refuse to start if `JWT_SECRET` or `EDGE_API_KEY` are left as their insecure defaults.*
+
+4. Click **Deploy**. Coolify will automatically provision the Nginx reverse proxy, provision SSL certificates, and route traffic to the frontend container on port `80`.
 
 ---
 
@@ -381,11 +387,7 @@ npm run dev
 
 The database schema initializes automatically on first Docker launch via [`backend/db/postgresql_schema.sql`](file:///d:/Projects/smartattend-ai/backend/db/postgresql_schema.sql).
 
-To manually seed or bootstrap initial data:
-```bash
-python seed_database.py
-```
-*Note: The seeder is completely non-destructive. If active administrators already exist in PostgreSQL, they are preserved intact.*
+If no administrators exist in the database, the system will **automatically bootstrap an initial admin account** using the `ADMIN_EMAIL` and `ADMIN_PASSWORD` environment variables on startup.
 
 ---
 

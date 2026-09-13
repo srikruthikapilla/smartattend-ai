@@ -34,9 +34,23 @@ BREVO_FROM_EMAIL = os.getenv("BREVO_FROM_EMAIL", "")
 BREVO_FROM_NAME = os.getenv("BREVO_FROM_NAME", "Smart Attend — SBIT")
 
 NODE_ENV = os.getenv("NODE_ENV", "development").lower()
+IS_PRODUCTION = NODE_ENV == "production"
 
-JWT_SECRET = os.getenv("JWT_SECRET", "smartattend-secure-qr-jwt-key-2026")
-if NODE_ENV == "production" and (not JWT_SECRET or JWT_SECRET == "smartattend-secure-qr-jwt-key-2026"):
+# ---------------------------------------------------------------------------
+# Security Secrets — MUST be overridden in production
+# ---------------------------------------------------------------------------
+_INSECURE_JWT_DEFAULT = "smartattend-secure-qr-jwt-key-2026"
+JWT_SECRET = os.getenv("JWT_SECRET", _INSECURE_JWT_DEFAULT)
+if IS_PRODUCTION and (not JWT_SECRET or JWT_SECRET == _INSECURE_JWT_DEFAULT):
     raise RuntimeError("CRITICAL SECURITY ERROR: A custom JWT_SECRET must be set in production.")
 
-EDGE_API_KEY = os.getenv("EDGE_API_KEY", "smartattend-edge-default-key")
+_INSECURE_EDGE_DEFAULT = "smartattend-edge-default-key"
+EDGE_API_KEY = os.getenv("EDGE_API_KEY", _INSECURE_EDGE_DEFAULT)
+if IS_PRODUCTION and (not EDGE_API_KEY or EDGE_API_KEY == _INSECURE_EDGE_DEFAULT):
+    raise RuntimeError("CRITICAL SECURITY ERROR: A custom EDGE_API_KEY must be set in production.")
+
+# ---------------------------------------------------------------------------
+# Bootstrap Admin — seeded on first startup if no admin accounts exist
+# ---------------------------------------------------------------------------
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@sbit.ac.in")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Admin@123!")

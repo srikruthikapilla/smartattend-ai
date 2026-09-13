@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smartattend}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgrespassword}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localdevpassword123}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/db/postgresql_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
@@ -15,16 +15,19 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    # Not exposed to host — internal service only
 
   redis:
     image: redis:7-alpine
     container_name: smartattend-redis
     restart: always
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
+    # Not exposed to host — internal service only
 
   backend:
     build:
@@ -35,20 +38,29 @@ services:
     environment:
       PORT: 5000
       NODE_ENV: ${NODE_ENV:-development}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgrespassword}@postgres:5432/${POSTGRES_DB:-smartattend}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-localdevpassword123}@postgres:5432/${POSTGRES_DB:-smartattend}
       REDIS_URL: redis://redis:6379/0
-      JWT_SECRET: ${JWT_SECRET:-smartattend-secure-qr-jwt-key-2026}
-      EDGE_API_KEY: ${EDGE_API_KEY:-smartattend-edge-default-key}
+      # Security secrets — MUST be overridden in Coolify for production.
+      # The backend app will raise a RuntimeError at startup if NODE_ENV=production
+      # and these still hold their default values.
+      JWT_SECRET: ${JWT_SECRET:-local-dev-jwt-secret-not-for-production}
+      EDGE_API_KEY: ${EDGE_API_KEY:-local-dev-edge-key-not-for-production}
+      # Bootstrap admin — used only if no admins exist in the DB
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@sbit.ac.in}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin@123!}
+      # CORS
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      # Brevo SMTP
       BREVO_SMTP_SERVER: ${BREVO_SMTP_SERVER:-smtp-relay.brevo.com}
       BREVO_SMTP_PORT: ${BREVO_SMTP_PORT:-587}
       BREVO_SMTP_LOGIN: ${BREVO_SMTP_LOGIN:-}
       BREVO_SMTP_KEY: ${BREVO_SMTP_KEY:-}
       BREVO_FROM_EMAIL: ${BREVO_FROM_EMAIL:-}
       BREVO_FROM_NAME: ${BREVO_FROM_NAME:-Smart Attend — SBIT}
-    ports:
-      - "5000:5000"
+    # Backend is NOT exposed to host — access is via Nginx reverse proxy only
+    expose:
+      - "5000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,7 +71,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
   frontend:
     build:

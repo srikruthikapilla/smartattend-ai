@@ -24,6 +24,40 @@
   }
 }
 
+/* ──── Leaflet + Tailwind Fixes ──── */
+.leaflet-container img {
+  max-width: none !important;
+  max-height: none !important;
+  width: auto;
+  height: auto;
+}
+/* Ensure the map container has z-index lower than modals */
+.leaflet-container {
+  z-index: 10;
+}
+.leaflet-top, .leaflet-bottom {
+  z-index: 10 !important;
+}
+
+/* Dark Mode Support for Leaflet (Inverts CartoDB Voyager tiles) */
+.dark .leaflet-layer,
+.dark .leaflet-control-zoom-in,
+.dark .leaflet-control-zoom-out,
+.dark .leaflet-control-attribution {
+  filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+}
+
+/* Premium Popup Styling */
+.custom-popup .leaflet-popup-content-wrapper {
+  @apply bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200/80 dark:border-slate-800/80 shadow-xl rounded-xl p-1;
+}
+.custom-popup .leaflet-popup-tip {
+  @apply bg-white/95 dark:bg-slate-900/95 border border-slate-200/80 dark:border-slate-800/80;
+}
+.custom-popup .leaflet-popup-close-button {
+  @apply text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors mt-1 mr-1;
+}
+
 /* ──── Shimmer Animation ──── */
 @keyframes shimmer {
   0% { transform: translateX(-100%); }

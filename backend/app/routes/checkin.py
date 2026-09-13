@@ -9,7 +9,7 @@ import uuid
 import re
 import logging
 import jwt
-from fastapi import APIRouter, HTTPException, Body, Depends
+from fastapi import APIRouter, HTTPException, Body, Depends, Security
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
@@ -30,7 +30,7 @@ from app.routes.student_face import student_face_cache
 from app.utils.geofence import current_geofence, calculate_haversine_distance
 from app.utils.face_matcher import compare_face_embeddings
 from app.database import get_db, get_db_context
-from app.dependencies.auth import verify_edge_key
+from app.dependencies.auth import verify_edge_key, get_current_user, require_role
 from app.services.face_recognition_service import face_service
 
 logger = logging.getLogger(__name__)
@@ -360,13 +360,30 @@ def get_student_enrollment_status(hall_ticket: str, db: Session = Depends(get_db
 
 
 @router.post("/api/student/reset-biometrics/{hall_ticket}")
-def reset_student_biometrics(hall_ticket: str, db: Session = Depends(get_db)):
+def reset_student_biometrics(
+    hall_ticket: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """
     Clears face & biometric enrollment cache and database status for re-registration.
+    Requires authentication. Caller must be the student themselves, or an admin/faculty.
     """
     ht = hall_ticket.strip().upper()
     if not re.match(r"^2[0-9A-Z]{9}$", ht):
         raise HTTPException(status_code=400, detail="Invalid Hall Ticket format.")
+
+    # Authorization: admin/faculty may reset any student; students may only reset themselves
+    caller_role = (current_user.get("role") or "student").lower()
+    if caller_role not in ("admin", "faculty"):
+        caller_email = str(current_user.get("email") or "").lower()
+        caller_meta = current_user.get("payload") or {}
+        caller_ht = str(caller_meta.get("hall_ticket_no") or "").upper()
+        if caller_ht != ht and not caller_email.startswith(ht.lower() + "@"):
+            raise HTTPException(
+                status_code=403,
+                detail="Forbidden: You can only reset your own biometric profile."
+            )
 
     student_face_cache.pop(ht, None)
     student_face_cache.pop(ht.lower(), None)
@@ -403,11 +420,15 @@ def reset_student_biometrics(hall_ticket: str, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/api/admin/clear-all-biometrics")
+@router.post(
+    "/api/admin/clear-all-biometrics",
+    dependencies=[Depends(require_role("admin"))]
+)
 def clear_all_registered_biometrics(db: Session = Depends(get_db)):
     """
     Purges all previously registered face descriptors and biometrics across DB & in-memory caches.
     All students will be treated as fresh/new registrations.
+    Requires: admin JWT.
     """
     student_face_cache.clear()
     student_profiles.clear()

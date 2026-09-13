@@ -7,11 +7,23 @@ logger = logging.getLogger(__name__)
 # In-memory fallback if Redis is unavailable
 _memory_otp_cache: Dict[str, dict] = {}
 
+# None = not yet attempted; False = permanently failed; object = connected client
 _redis_client = None
 
+
 def get_redis_client():
+    """
+    Return a connected Redis client, or None if unavailable.
+
+    Uses a lazy-init singleton with retry semantics:
+    - First call attempts connection.
+    - On failure, _redis_client is reset to None so the next call retries.
+      (Previous bug: set to False, blocking all future retry attempts.)
+    """
     global _redis_client
-    if _redis_client is not None:
+
+    # If we already have a live client, return it
+    if _redis_client is not None and _redis_client is not False:
         return _redis_client
 
     try:
@@ -24,12 +36,15 @@ def get_redis_client():
         return _redis_client
     except Exception as e:
         logger.warning(f"[Redis] Unable to connect to Redis ({e}). Using in-memory OTP fallback.")
-        _redis_client = False
+        # Reset to None (not False) so the next call retries after Redis recovers
+        _redis_client = None
         return None
+
 
 def is_redis_available() -> bool:
     client = get_redis_client()
     return bool(client)
+
 
 def set_otp(email: str, otp: str, ttl_seconds: int = 600) -> bool:
     """Store 6-digit password reset OTP with TTL expiration."""
@@ -48,6 +63,7 @@ def set_otp(email: str, otp: str, ttl_seconds: int = 600) -> bool:
         "expires_at": time.time() + ttl_seconds
     }
     return True
+
 
 def get_otp(email: str) -> Optional[str]:
     """Retrieve active password reset OTP if not expired."""
@@ -69,6 +85,7 @@ def get_otp(email: str) -> Optional[str]:
         else:
             del _memory_otp_cache[clean_email]
     return None
+
 
 def delete_otp(email: str) -> bool:
     """Delete OTP upon successful password reset."""
