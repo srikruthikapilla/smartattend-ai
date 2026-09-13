@@ -1,9 +1,21 @@
+"""
+Smart Attend — Student Face Biometrics Routes
+==============================================
+All face vectors and DPDP biometric consent records are stored in PostgreSQL.
+"""
+
+import uuid
 import logging
 from fastapi import APIRouter, HTTPException, Depends
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
+
+from sqlalchemy.orm import Session
+from sqlalchemy import or_, func
+
 from app.models.schemas import FaceEmbeddingPayload, FaceEnrollmentRequest
-from app.database import supabase_client
+from app.models.db_models import User, StudentFaceEmbedding, AuditLog
+from app.database import get_db
 from app.dependencies.auth import get_current_user
 from app.services.face_recognition_service import face_service
 
@@ -60,7 +72,7 @@ def verify_student_ownership(student_id: str, current_user: Dict[str, Any]):
     """
     user_id = str(current_user.get("id") or current_user.get("sub", ""))
     user_role = current_user.get("role", "student")
-    
+
     if user_role in ["admin", "faculty"]:
         return
 
@@ -83,12 +95,31 @@ def verify_student_ownership(student_id: str, current_user: Dict[str, Any]):
     )
 
 
+def _find_user(db: Session, student_id: str, normalized_ht: Optional[str] = None) -> Optional[User]:
+    """Helper to locate user by UUID or hall ticket in PostgreSQL."""
+    try:
+        uid = uuid.UUID(student_id)
+        user = db.query(User).filter(User.id == uid).first()
+        if user:
+            return user
+    except Exception:
+        pass
+
+    if normalized_ht:
+        user = db.query(User).filter(func.upper(User.hall_ticket_no) == normalized_ht).first()
+        if user:
+            return user
+
+    return db.query(User).filter(func.upper(User.hall_ticket_no) == _normalize_student_key(student_id)).first()
+
+
 @router.post("/{student_id}/enroll-face")
 @router.post("/{student_id}/face")
 def enroll_student_face(
     student_id: str,
     payload: FaceEnrollmentRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     Student captures & registers their reference 128-D / 512-D face embedding vector
@@ -109,44 +140,59 @@ def enroll_student_face(
             detail="Student biometric consent declaration is required for enrollment."
         )
 
-    now_iso = datetime.utcnow().isoformat() + "Z"
+    now_dt = datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat()
     ht = payload.hallTicketNo or student_id
+    normalized_ht = _normalize_student_key(ht)
     user_name = current_user.get("name") or current_user.get("user_metadata", {}).get("name")
 
     _cache_face_descriptor(student_id, payload.faceDescriptor, now_iso, ht, user_name)
 
-    if supabase_client:
-        try:
-            lookup_clauses = [f"id.eq.{student_id}"]
-            normalized_ht = _normalize_student_key(ht)
-            if normalized_ht:
-                lookup_clauses.append(f"hall_ticket_no.eq.{normalized_ht}")
+    try:
+        # 1. Update user profile in PostgreSQL
+        user = _find_user(db, student_id, normalized_ht)
+        if user:
+            user.face_descriptor = payload.faceDescriptor
+            user.face_enrollment_status = "enrolled"
+            user.face_enrolled_at = now_dt
+            user.updated_at = now_dt
+            if not user.hall_ticket_no and normalized_ht:
+                user.hall_ticket_no = normalized_ht
 
-            # 1. Update users profile
-            supabase_client.table("users").update({
-                "face_descriptor": payload.faceDescriptor,
-                "face_enrollment_status": "enrolled",
-                "face_enrolled_at": now_iso
-            }).or_(",".join(lookup_clauses)).execute()
+        # 2. Persist to student_face_embeddings table
+        ht_key = normalized_ht or student_id
+        emb_record = db.query(StudentFaceEmbedding).filter_by(hall_ticket_no=ht_key).first()
+        algo = payload.algorithm or ("arcface_512" if len(payload.faceDescriptor) == 512 else "facenet_128")
 
-            # 2. Persist to student_face_embeddings table
-            try:
-                supabase_client.table("student_face_embeddings").upsert({
-                    "hall_ticket_no": normalized_ht or student_id,
-                    "embedding_vector": payload.faceDescriptor,
-                    "embedding_dim": len(payload.faceDescriptor),
-                    "algorithm": payload.algorithm or ("arcface_512" if len(payload.faceDescriptor) == 512 else "facenet_128"),
-                    "student_consent": True,
-                    "consent_timestamp": now_iso,
-                    "enrolled_at": now_iso,
-                    "updated_at": now_iso
-                }, on_conflict="hall_ticket_no").execute()
-            except Exception as emb_err:
-                logger.warning(f"Note on student_face_embeddings upsert: {emb_err}")
+        if emb_record:
+            emb_record.embedding_vector = payload.faceDescriptor
+            emb_record.embedding_dim = len(payload.faceDescriptor)
+            emb_record.algorithm = algo
+            emb_record.student_consent = True
+            emb_record.consent_timestamp = now_dt
+            emb_record.updated_at = now_dt
+            if user:
+                emb_record.user_id = user.id
+        else:
+            new_emb = StudentFaceEmbedding(
+                id=uuid.uuid4(),
+                user_id=user.id if user else None,
+                hall_ticket_no=ht_key,
+                embedding_vector=payload.faceDescriptor,
+                embedding_dim=len(payload.faceDescriptor),
+                algorithm=algo,
+                student_consent=True,
+                consent_timestamp=now_dt,
+                enrolled_at=now_dt,
+                updated_at=now_dt
+            )
+            db.add(new_emb)
 
-        except Exception as e:
-            logger.error(f"Failed to save face descriptor for student {student_id}: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Database failure: Could not persist face biometric.")
+        db.commit()
+
+    except Exception as e:
+        logger.error(f"Failed to save face descriptor for student {student_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database failure: Could not persist face biometric.")
 
     return {
         "success": True,
@@ -162,7 +208,8 @@ def enroll_student_face(
 def update_student_face(
     student_id: str,
     payload: FaceEmbeddingPayload,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     Student re-captures and updates their reference face embedding.
@@ -173,39 +220,52 @@ def update_student_face(
     if not payload.faceDescriptor or len(payload.faceDescriptor) not in (128, 512):
         raise HTTPException(status_code=400, detail="A valid 128-D or 512-D faceDescriptor array is required.")
 
-    now_iso = datetime.utcnow().isoformat() + "Z"
+    now_dt = datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat()
     ht = payload.hallTicketNo or student_id
+    normalized_ht = _normalize_student_key(ht)
     user_name = current_user.get("name") or current_user.get("user_metadata", {}).get("name")
 
     _cache_face_descriptor(student_id, payload.faceDescriptor, now_iso, ht, user_name)
 
-    if supabase_client:
-        try:
-            lookup_clauses = [f"id.eq.{student_id}"]
-            normalized_ht = _normalize_student_key(ht)
-            if normalized_ht:
-                lookup_clauses.append(f"hall_ticket_no.eq.{normalized_ht}")
+    try:
+        user = _find_user(db, student_id, normalized_ht)
+        if user:
+            user.face_descriptor = payload.faceDescriptor
+            user.face_enrollment_status = "enrolled"
+            user.face_enrolled_at = now_dt
+            user.updated_at = now_dt
 
-            supabase_client.table("users").update({
-                "face_descriptor": payload.faceDescriptor,
-                "face_enrollment_status": "enrolled",
-                "face_enrolled_at": now_iso
-            }).or_(",".join(lookup_clauses)).execute()
+        ht_key = normalized_ht or student_id
+        emb_record = db.query(StudentFaceEmbedding).filter_by(hall_ticket_no=ht_key).first()
+        algo = payload.algorithm or ("arcface_512" if len(payload.faceDescriptor) == 512 else "facenet_128")
 
-            try:
-                supabase_client.table("student_face_embeddings").upsert({
-                    "hall_ticket_no": normalized_ht or student_id,
-                    "embedding_vector": payload.faceDescriptor,
-                    "embedding_dim": len(payload.faceDescriptor),
-                    "algorithm": payload.algorithm or ("arcface_512" if len(payload.faceDescriptor) == 512 else "facenet_128"),
-                    "student_consent": True,
-                    "updated_at": now_iso
-                }, on_conflict="hall_ticket_no").execute()
-            except Exception:
-                pass
-        except Exception as e:
-            logger.error(f"Failed to update face descriptor for student {student_id}: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Database failure: Could not update face biometric.")
+        if emb_record:
+            emb_record.embedding_vector = payload.faceDescriptor
+            emb_record.embedding_dim = len(payload.faceDescriptor)
+            emb_record.algorithm = algo
+            emb_record.student_consent = True
+            emb_record.updated_at = now_dt
+        else:
+            new_emb = StudentFaceEmbedding(
+                id=uuid.uuid4(),
+                user_id=user.id if user else None,
+                hall_ticket_no=ht_key,
+                embedding_vector=payload.faceDescriptor,
+                embedding_dim=len(payload.faceDescriptor),
+                algorithm=algo,
+                student_consent=True,
+                consent_timestamp=now_dt,
+                enrolled_at=now_dt,
+                updated_at=now_dt
+            )
+            db.add(new_emb)
+
+        db.commit()
+
+    except Exception as e:
+        logger.error(f"Failed to update face descriptor for student {student_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database failure: Could not update face biometric.")
 
     return {
         "success": True,
@@ -219,7 +279,8 @@ def update_student_face(
 @router.delete("/{student_id}/face")
 def revoke_student_face_data(
     student_id: str,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     Student exercises Right-to-Erasure (DPDP Act) and removes their stored face biometric embedding.
@@ -234,37 +295,38 @@ def revoke_student_face_data(
     if norm_id:
         face_service.remove_embedding(norm_id)
 
-    if supabase_client:
-        try:
-            lookup_clauses = [f"id.eq.{student_id}"]
-            if norm_id:
-                lookup_clauses.append(f"hall_ticket_no.eq.{norm_id}")
+    try:
+        now_dt = datetime.now(timezone.utc)
+        user = _find_user(db, student_id, norm_id)
+        if user:
+            user.face_descriptor = None
+            user.face_enrollment_status = "pending"
+            user.face_enrolled_at = None
+            user.updated_at = now_dt
 
-            supabase_client.table("users").update({
-                "face_descriptor": None,
-                "face_enrollment_status": "pending",
-                "face_enrolled_at": None
-            }).or_(",".join(lookup_clauses)).execute()
+        # Delete embeddings
+        db.query(StudentFaceEmbedding).filter(
+            or_(
+                StudentFaceEmbedding.hall_ticket_no == norm_id,
+                StudentFaceEmbedding.hall_ticket_no == student_id
+            )
+        ).delete(synchronize_session=False)
 
-            try:
-                supabase_client.table("student_face_embeddings").delete().eq("hall_ticket_no", norm_id).execute()
-            except Exception:
-                pass
+        # Log to audit trail
+        audit = AuditLog(
+            id=uuid.uuid4(),
+            action="BIOMETRIC_DATA_REVOKED",
+            performed_by=str(current_user.get("email") or student_id),
+            performer_role=current_user.get("role", "student"),
+            details={"student_id": student_id, "reason": "User requested biometric erasure"},
+            timestamp=now_dt
+        )
+        db.add(audit)
+        db.commit()
 
-            # Log to audit trail
-            try:
-                supabase_client.table("audit_logs").insert({
-                    "action": "BIOMETRIC_DATA_REVOKED",
-                    "performed_by": str(current_user.get("email") or student_id),
-                    "performer_role": current_user.get("role", "student"),
-                    "details": {"student_id": student_id, "reason": "User requested biometric erasure"}
-                }).execute()
-            except Exception:
-                pass
-
-        except Exception as e:
-            logger.error(f"Failed to delete face descriptor for student {student_id}: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Database failure: Could not delete face biometric.")
+    except Exception as e:
+        logger.error(f"Failed to delete face descriptor for student {student_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database failure: Could not delete face biometric.")
 
     return {
         "success": True,

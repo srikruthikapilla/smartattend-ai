@@ -1,17 +1,35 @@
+"""
+Smart Attend — Public Checkin & Student Portal Routes
+======================================================
+All data operations (sessions, students, biometrics, attendance records)
+are persisted to and queried from PostgreSQL via SQLAlchemy.
+"""
+
 import uuid
 import re
 import logging
 import jwt
 from fastapi import APIRouter, HTTPException, Body, Depends
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
+
+from sqlalchemy.orm import Session
+from sqlalchemy import desc, or_, func
+
 from app.config import JWT_SECRET
 from app.models.schemas import VerifyCheckinPayload
+from app.models.db_models import (
+    User,
+    AttendanceSession,
+    AttendanceRecord,
+    StudentFaceEmbedding,
+    GeofenceConfig
+)
 from app.routes.qr_session import current_session, valid_session_tokens
 from app.routes.student_face import student_face_cache
 from app.utils.geofence import current_geofence, calculate_haversine_distance
 from app.utils.face_matcher import compare_face_embeddings
-from app.database import supabase_client
+from app.database import get_db, get_db_context
 from app.dependencies.auth import verify_edge_key
 from app.services.face_recognition_service import face_service
 
@@ -26,7 +44,6 @@ def _extract_raw_token(token: str) -> str:
     If it's already a bare UUID or JWT, return as-is.
     """
     t = token.strip()
-    # Full checkin URL: extract UUID after ?token=
     if 'token=' in t:
         parts = t.split('token=')
         if len(parts) > 1:
@@ -55,52 +72,49 @@ def _normalize_student_key(value: str) -> str:
 def _load_enrolled_face_descriptor(hall_ticket: str) -> Optional[List[float]]:
     """
     Resolve the stored reference face for a student.
-    Prefers the persisted DB descriptor (users & student_face_embeddings), then the in-memory enrollment cache.
+    Prefers the persisted PostgreSQL descriptor (users & student_face_embeddings), then the in-memory enrollment cache.
     """
     normalized_ht = _normalize_student_key(hall_ticket)
     if not normalized_ht:
         return None
 
-    if supabase_client:
-        try:
+    try:
+        with get_db_context() as db:
             # 1. Check users table
-            u_res = supabase_client.table("users")\
-                .select("face_descriptor, face_enrollment_status")\
-                .ilike("hall_ticket_no", normalized_ht)\
-                .limit(1)\
-                .execute()
-            if u_res.data and len(u_res.data) > 0:
-                db_desc = u_res.data[0].get("face_descriptor")
-                if db_desc and isinstance(db_desc, list) and len(db_desc) in (128, 512):
-                    logger.info(f"[Face] Loaded enrolled descriptor from DB users for {normalized_ht}")
-                    return db_desc
+            user = (
+                db.query(User)
+                .filter(func.upper(User.hall_ticket_no) == normalized_ht)
+                .first()
+            )
+            if user and user.face_descriptor and isinstance(user.face_descriptor, list) and len(user.face_descriptor) in (128, 512):
+                logger.info(f"[Face] Loaded enrolled descriptor from PostgreSQL users for {normalized_ht}")
+                return user.face_descriptor
 
             # 2. Check student_face_embeddings table
-            emb_res = supabase_client.table("student_face_embeddings")\
-                .select("embedding_vector")\
-                .ilike("hall_ticket_no", normalized_ht)\
-                .limit(1)\
-                .execute()
-            if emb_res.data and len(emb_res.data) > 0:
-                emb_vec = emb_res.data[0].get("embedding_vector")
-                if emb_vec and isinstance(emb_vec, list) and len(emb_vec) in (128, 512):
-                    logger.info(f"[Face] Loaded enrolled descriptor from DB student_face_embeddings for {normalized_ht}")
-                    return emb_vec
-        except Exception as e:
-            logger.warning(f"Error fetching enrolled descriptor from DB: {e}")
+            emb = (
+                db.query(StudentFaceEmbedding)
+                .filter(func.upper(StudentFaceEmbedding.hall_ticket_no) == normalized_ht)
+                .first()
+            )
+            if emb and emb.embedding_vector and isinstance(emb.embedding_vector, list) and len(emb.embedding_vector) in (128, 512):
+                logger.info(f"[Face] Loaded enrolled descriptor from PostgreSQL student_face_embeddings for {normalized_ht}")
+                return emb.embedding_vector
+    except Exception as e:
+        logger.warning(f"Error fetching enrolled descriptor from PostgreSQL: {e}")
 
     for key in (normalized_ht, normalized_ht.lower()):
         cached = student_face_cache.get(key)
         if cached:
-            desc = cached.get("descriptor")
-            if desc and len(desc) in (128, 512):
+            desc_val = cached.get("descriptor")
+            if desc_val and len(desc_val) in (128, 512):
                 logger.info(f"[Face] Loaded enrolled descriptor from cache for {normalized_ht}")
-                return desc
+                return desc_val
 
     return None
 
+
 @router.get("/api/checkin/session/{token:path}")
-def validate_checkin_session(token: str):
+def validate_checkin_session(token: str, db: Session = Depends(get_db)):
     """
     Public check-in endpoint: Student's phone camera scans QR code
     and this validates the session token.
@@ -159,42 +173,51 @@ def validate_checkin_session(token: str):
             }
         }
 
-    # --- Strategy 3: Check active sessions in Database ---
-    if supabase_client:
-        try:
-            # Query by exact token or any active session
-            res = supabase_client.table("attendance_sessions")\
-                .select("*")\
-                .eq("status", "active")\
-                .order("created_at", desc=True)\
-                .limit(1)\
-                .execute()
-            if res.data and len(res.data) > 0:
-                s = res.data[0]
-                session_lat = s.get("faculty_lat") or current_geofence["center_lat"]
-                session_lng = s.get("faculty_lng") or current_geofence["center_lng"]
-                radius_m = s.get("radius_meters") or 500
-                return {
-                    "valid": True,
-                    "session": {
-                        "sessionId": s.get("id"),
-                        "sessionTitle": s.get("session_title", "Active Session"),
-                        "facultyName": s.get("faculty_name", "Faculty"),
-                        "branch": s.get("branch", "CSE"),
-                        "section": s.get("section", "A"),
-                        "room": s.get("room", "Innovation Centre Lab"),
-                        "faculty_lat": session_lat,
-                        "faculty_lng": session_lng,
-                        "radius_meters": radius_m
-                    },
-                    "geofence": {
-                        "centerLat": session_lat,
-                        "centerLng": session_lng,
-                        "radiusMeters": radius_m
-                    }
+    # --- Strategy 3: Check active sessions in PostgreSQL ---
+    try:
+        now_dt = datetime.now(timezone.utc)
+        # Check by qr_token first, or any active session
+        s = None
+        if clean_token:
+            s = db.query(AttendanceSession).filter(
+                AttendanceSession.qr_token == clean_token,
+                AttendanceSession.status == "active"
+            ).first()
+
+        if not s:
+            s = (
+                db.query(AttendanceSession)
+                .filter(AttendanceSession.status == "active")
+                .order_by(desc(AttendanceSession.created_at))
+                .first()
+            )
+
+        if s:
+            geo = s.geofence or {}
+            session_lat = geo.get("lat") or current_geofence["center_lat"]
+            session_lng = geo.get("lng") or current_geofence["center_lng"]
+            radius_m = s.radius_meters or 500
+            return {
+                "valid": True,
+                "session": {
+                    "sessionId": str(s.id),
+                    "sessionTitle": s.session_title,
+                    "facultyName": s.faculty_name,
+                    "branch": s.branch,
+                    "section": s.section,
+                    "room": s.room,
+                    "faculty_lat": session_lat,
+                    "faculty_lng": session_lng,
+                    "radius_meters": radius_m
+                },
+                "geofence": {
+                    "centerLat": session_lat,
+                    "centerLng": session_lng,
+                    "radiusMeters": radius_m
                 }
-        except Exception as e:
-            logger.warning(f"DB session check note: {e}")
+            }
+    except Exception as e:
+        logger.warning(f"PostgreSQL session check note: {e}")
 
     # --- Strategy 4: JWT token validation ---
     if clean_token:
@@ -225,7 +248,7 @@ def validate_checkin_session(token: str):
     return {
         "valid": True,
         "session": {
-            "sessionId": f"campus_sess_{datetime.utcnow().strftime('%Y%m%d')}",
+            "sessionId": f"campus_sess_{datetime.now(timezone.utc).strftime('%Y%m%d')}",
             "sessionTitle": "SBIT Innovation Centre Academic Session",
             "facultyName": "Faculty Incharge",
             "branch": "ALL",
@@ -244,10 +267,10 @@ def validate_checkin_session(token: str):
 
 
 @router.get("/api/student/check-status/{hall_ticket}")
-def get_student_enrollment_status(hall_ticket: str):
+def get_student_enrollment_status(hall_ticket: str, db: Session = Depends(get_db)):
     """
     Public endpoint: Checks whether a student with Hall Ticket No (2XXXXXXXXX)
-    has already enrolled their face & platform biometrics.
+    has already enrolled their face & platform biometrics in PostgreSQL.
     """
     ht = hall_ticket.strip().upper()
     if not re.match(r"^2[0-9A-Z]{9}$", ht):
@@ -258,27 +281,28 @@ def get_student_enrollment_status(hall_ticket: str):
     section = "A"
     year = 3
     enrolled_desc = _load_enrolled_face_descriptor(ht)
-    is_face_enrolled = (enrolled_desc is not None and len(enrolled_desc) == 128)
     is_bio_enrolled = False
 
-    if supabase_client:
-        try:
-            res = supabase_client.table("users").select("*").or_(f"hall_ticket_no.ilike.{ht},email.ilike.{ht.lower()}@%").limit(1).execute()
-            if res.data and len(res.data) > 0:
-                u = res.data[0]
-                student_name = u.get("name") or student_name
-                branch = u.get("branch") or branch
-                section = u.get("section") or section
-                year = int(u.get("year") or 3)
-                if not enrolled_desc:
-                    db_desc = u.get("face_descriptor")
-                    if db_desc and isinstance(db_desc, list) and len(db_desc) in (128, 512):
-                        enrolled_desc = db_desc
-                is_bio_enrolled = u.get("biometric_enrollment_status") == "enrolled" or bool(u.get("biometric_credential_id"))
-        except Exception as e:
-            logger.warning(f"Supabase student lookup note: {e}")
+    try:
+        user = db.query(User).filter(
+            or_(
+                func.upper(User.hall_ticket_no) == ht,
+                func.lower(User.email).like(f"{ht.lower()}@%")
+            )
+        ).first()
 
-    # Face is enrolled ONLY if a valid embedding vector actually exists in DB/cache
+        if user:
+            student_name = user.name or student_name
+            branch = user.branch or branch
+            section = user.section or section
+            year = int(user.year or 3)
+            if not enrolled_desc and user.face_descriptor:
+                if isinstance(user.face_descriptor, list) and len(user.face_descriptor) in (128, 512):
+                    enrolled_desc = user.face_descriptor
+            is_bio_enrolled = (user.biometric_enrollment_status == "enrolled") or bool(user.biometric_credential_id)
+    except Exception as e:
+        logger.warning(f"PostgreSQL student lookup note: {e}")
+
     is_face_enrolled = bool(enrolled_desc and isinstance(enrolled_desc, list) and len(enrolled_desc) in (128, 512))
 
     # Check if student is already marked present today or in active session
@@ -288,26 +312,25 @@ def get_student_enrollment_status(hall_ticket: str):
             already_marked_record = rec
             break
 
-    if not already_marked_record and supabase_client:
+    if not already_marked_record:
         try:
-            today_start = datetime.utcnow().strftime("%Y-%m-%d") + "T00:00:00Z"
-            rec_res = supabase_client.table("attendance_records")\
-                .select("*")\
-                .ilike("hall_ticket_no", ht)\
-                .gte("marked_at", today_start)\
-                .order("marked_at", desc=True)\
-                .limit(1)\
-                .execute()
-            if rec_res.data and len(rec_res.data) > 0:
-                r = rec_res.data[0]
+            today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            rec = (
+                db.query(AttendanceRecord)
+                .filter(func.upper(AttendanceRecord.hall_ticket_no) == ht)
+                .filter(AttendanceRecord.marked_at >= today_start)
+                .order_by(desc(AttendanceRecord.marked_at))
+                .first()
+            )
+            if rec:
                 already_marked_record = {
-                    "id": r.get("id"),
-                    "sessionId": r.get("session_id"),
+                    "id": str(rec.id),
+                    "sessionId": str(rec.session_id) if rec.session_id else None,
                     "hallTicketNo": ht,
-                    "studentName": r.get("student_name") or student_name,
-                    "markedAt": r.get("marked_at"),
-                    "status": r.get("status") or "present",
-                    "verificationMethod": r.get("verification_method") or "face_recognition"
+                    "studentName": rec.student_name or student_name,
+                    "markedAt": rec.marked_at.isoformat() if rec.marked_at else None,
+                    "status": rec.status or "present",
+                    "verificationMethod": rec.verification_method or "face_recognition"
                 }
         except Exception as e:
             logger.warning(f"Check already marked note: {e}")
@@ -335,8 +358,9 @@ def get_student_enrollment_status(hall_ticket: str):
         "profile": profile
     }
 
+
 @router.post("/api/student/reset-biometrics/{hall_ticket}")
-def reset_student_biometrics(hall_ticket: str):
+def reset_student_biometrics(hall_ticket: str, db: Session = Depends(get_db)):
     """
     Clears face & biometric enrollment cache and database status for re-registration.
     """
@@ -354,33 +378,40 @@ def reset_student_biometrics(hall_ticket: str):
         student_profiles[ht]["biometricEnrolled"] = False
         student_profiles[ht]["faceDescriptor"] = None
 
-    if supabase_client:
-        try:
-            supabase_client.table("users").update({
-                "face_descriptor": None,
-                "face_enrollment_status": "pending",
-                "face_enrolled_at": None,
-                "biometric_credential_id": None,
-                "biometric_enrollment_status": "pending",
-                "biometric_enrolled_at": None
-            }).ilike("hall_ticket_no", ht).execute()
-        except Exception as e:
-            logger.warning(f"Reset face biometrics note: {e}")
+    try:
+        user = db.query(User).filter(func.upper(User.hall_ticket_no) == ht).first()
+        if user:
+            user.face_descriptor = None
+            user.face_enrollment_status = "pending"
+            user.face_enrolled_at = None
+            user.biometric_credential_id = None
+            user.biometric_enrollment_status = "pending"
+            user.biometric_enrolled_at = None
+            user.updated_at = datetime.now(timezone.utc)
+
+        db.query(StudentFaceEmbedding).filter(
+            func.upper(StudentFaceEmbedding.hall_ticket_no) == ht
+        ).delete()
+
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Reset face biometrics note: {e}")
 
     return {
         "success": True,
         "message": f"Biometric profile reset for {ht}. You can now register a fresh face scan."
     }
 
+
 @router.post("/api/admin/clear-all-biometrics")
-def clear_all_registered_biometrics():
+def clear_all_registered_biometrics(db: Session = Depends(get_db)):
     """
     Purges all previously registered face descriptors and biometrics across DB & in-memory caches.
     All students will be treated as fresh/new registrations.
     """
     student_face_cache.clear()
     student_profiles.clear()
-    
+
     # Reset face recognition service memory registry
     face_service._enrolled_faces.clear()
     face_service._matrix_128 = None
@@ -388,30 +419,36 @@ def clear_all_registered_biometrics():
     face_service._keys_128.clear()
     face_service._keys_512.clear()
 
-    if supabase_client:
-        try:
-            users_res = supabase_client.table("users").select("id").execute()
-            for u in users_res.data:
-                supabase_client.table("users").update({
-                    "face_descriptor": None,
-                    "face_enrollment_status": "pending",
-                    "face_enrolled_at": None,
-                    "biometric_credential_id": None,
-                    "biometric_enrollment_status": "pending",
-                    "biometric_enrolled_at": None
-                }).eq("id", u["id"]).execute()
-        except Exception as e:
-            logger.warning(f"Supabase purge all note: {e}")
+    try:
+        users = db.query(User).all()
+        now_dt = datetime.now(timezone.utc)
+        for u in users:
+            u.face_descriptor = None
+            u.face_enrollment_status = "pending"
+            u.face_enrolled_at = None
+            u.biometric_credential_id = None
+            u.biometric_enrollment_status = "pending"
+            u.biometric_enrolled_at = None
+            u.updated_at = now_dt
+
+        db.query(StudentFaceEmbedding).delete()
+        db.commit()
+    except Exception as e:
+        logger.warning(f"PostgreSQL purge all note: {e}")
 
     return {
         "success": True,
         "message": "All previous biometric details cleared. All registrations are now fresh."
     }
 
+
 @router.post("/api/student/register-biometrics")
-def register_student_biometrics(payload: Dict[str, Any] = Body(...)):
+def register_student_biometrics(
+    payload: Dict[str, Any] = Body(...),
+    db: Session = Depends(get_db)
+):
     """
-    First-time student self-service enrollment for Face vector & Platform Biometrics.
+    First-time student self-service enrollment for Face vector & Platform Biometrics in PostgreSQL.
     """
     ht = payload.get("hallTicketNo", "").strip().upper()
     if not re.match(r"^2[0-9A-Z]{9}$", ht):
@@ -428,8 +465,6 @@ def register_student_biometrics(payload: Dict[str, Any] = Body(...)):
             raise HTTPException(status_code=400, detail="faceDescriptor must be a 128-dimensional or 512-dimensional float list.")
 
         # SECURITY: Prevent public re-enrollment when a face is already enrolled.
-        # This blocks the attack where Student A types Student B's hall ticket and
-        # overwrites B's enrolled face with A's face.
         existing_descriptor = _load_enrolled_face_descriptor(ht)
         if existing_descriptor and isinstance(existing_descriptor, list) and len(existing_descriptor) in (128, 512):
             logger.warning(f"[Security] Blocked public re-enrollment attempt for {ht} — face already enrolled. Use reset-biometrics first.")
@@ -438,9 +473,10 @@ def register_student_biometrics(payload: Dict[str, Any] = Body(...)):
                 detail=f"Face biometrics are already enrolled for {ht}. To re-register, use the 'Re-enroll Face' option first or contact your faculty."
             )
 
+        now_iso = datetime.now(timezone.utc).isoformat()
         student_face_cache[ht] = {
             "descriptor": face_descriptor,
-            "updatedAt": datetime.utcnow().isoformat() + "Z"
+            "updatedAt": now_iso
         }
         try:
             face_service.register_embedding(
@@ -462,36 +498,65 @@ def register_student_biometrics(payload: Dict[str, Any] = Body(...)):
         "biometricEnrolled": bool(bio_credential_id)
     }
 
-    if supabase_client:
-        try:
-            exist_res = supabase_client.table("users").select("id").eq("hall_ticket_no", ht).execute()
-            if exist_res.data and len(exist_res.data) > 0:
-                uid = exist_res.data[0]["id"]
-                supabase_client.table("users").update({
-                    "face_descriptor": face_descriptor,
-                    "face_enrollment_status": "enrolled" if face_descriptor else "pending",
-                    "face_enrolled_at": datetime.utcnow().isoformat() + "Z" if face_descriptor else None,
-                    "biometric_credential_id": bio_credential_id,
-                    "biometric_enrollment_status": "enrolled" if bio_credential_id else "pending",
-                    "biometric_enrolled_at": datetime.utcnow().isoformat() + "Z" if bio_credential_id else None
-                }).eq("id", uid).execute()
+    now_dt = datetime.now(timezone.utc)
+    try:
+        user = db.query(User).filter(func.upper(User.hall_ticket_no) == ht).first()
+        if user:
+            user.face_descriptor = face_descriptor
+            user.face_enrollment_status = "enrolled" if face_descriptor else "pending"
+            user.face_enrolled_at = now_dt if face_descriptor else None
+            user.biometric_credential_id = bio_credential_id
+            user.biometric_enrollment_status = "enrolled" if bio_credential_id else "pending"
+            user.biometric_enrolled_at = now_dt if bio_credential_id else None
+            user.updated_at = now_dt
+        else:
+            user = User(
+                id=uuid.uuid4(),
+                email=f"{ht.lower()}@sbit.ac.in",
+                hall_ticket_no=ht,
+                name=student_name,
+                role="student",
+                status="approved",
+                branch=branch,
+                section=section,
+                face_descriptor=face_descriptor,
+                face_enrollment_status="enrolled" if face_descriptor else "pending",
+                face_enrolled_at=now_dt if face_descriptor else None,
+                biometric_credential_id=bio_credential_id,
+                biometric_enrollment_status="enrolled" if bio_credential_id else "pending",
+                biometric_enrolled_at=now_dt if bio_credential_id else None,
+                created_at=now_dt,
+                updated_at=now_dt
+            )
+            db.add(user)
+
+        # Update student_face_embeddings
+        if face_descriptor:
+            emb = db.query(StudentFaceEmbedding).filter_by(hall_ticket_no=ht).first()
+            algo = "arcface_512" if len(face_descriptor) == 512 else "facenet_128"
+            if emb:
+                emb.embedding_vector = face_descriptor
+                emb.embedding_dim = len(face_descriptor)
+                emb.algorithm = algo
+                emb.updated_at = now_dt
             else:
-                supabase_client.table("users").insert({
-                    "hall_ticket_no": ht,
-                    "name": student_name,
-                    "role": "student",
-                    "status": "approved",
-                    "branch": branch,
-                    "section": section,
-                    "face_descriptor": face_descriptor,
-                    "face_enrollment_status": "enrolled" if face_descriptor else "pending",
-                    "face_enrolled_at": datetime.utcnow().isoformat() + "Z" if face_descriptor else None,
-                    "biometric_credential_id": bio_credential_id,
-                    "biometric_enrollment_status": "enrolled" if bio_credential_id else "pending",
-                    "biometric_enrolled_at": datetime.utcnow().isoformat() + "Z" if bio_credential_id else None
-                }).execute()
-        except Exception as e:
-            logger.warning(f"Supabase user biometric update note: {e}")
+                emb = StudentFaceEmbedding(
+                    id=uuid.uuid4(),
+                    user_id=user.id,
+                    hall_ticket_no=ht,
+                    embedding_vector=face_descriptor,
+                    embedding_dim=len(face_descriptor),
+                    algorithm=algo,
+                    student_consent=True,
+                    consent_timestamp=now_dt,
+                    enrolled_at=now_dt,
+                    updated_at=now_dt
+                )
+                db.add(emb)
+
+        db.commit()
+    except Exception as e:
+        logger.warning(f"PostgreSQL user biometric update note: {e}")
 
     return {
         "success": True,
@@ -499,11 +564,12 @@ def register_student_biometrics(payload: Dict[str, Any] = Body(...)):
         "profile": student_profiles[ht]
     }
 
+
 @router.get("/api/student/records/{hall_ticket}")
-def get_student_attendance_history(hall_ticket: str):
+def get_student_attendance_history(hall_ticket: str, db: Session = Depends(get_db)):
     """
     Public and Staff Attendance Check:
-    Retrieves real student details from the database along with true attendance statistics and session records.
+    Retrieves real student details from PostgreSQL along with true attendance statistics and session records.
     """
     ht = hall_ticket.strip().upper()
     if not re.match(r"^2[0-9A-Z]{9}$", ht):
@@ -515,49 +581,51 @@ def get_student_attendance_history(hall_ticket: str):
     section = "A"
     year = 3
     email = ""
-    status = "approved"
+    status_val = "approved"
     face_status = "pending"
     bio_status = "pending"
 
-    if supabase_client:
-        try:
-            u_res = supabase_client.table("users").select("*").or_(f"hall_ticket_no.ilike.{ht},email.ilike.{ht.lower()}@%").limit(1).execute()
-            if u_res.data and len(u_res.data) > 0:
-                u = u_res.data[0]
-                student_name = u.get("name") or student_name
-                branch = u.get("branch") or branch
-                section = u.get("section") or section
-                year = int(u.get("year") or 3)
-                email = u.get("email") or ""
-                status = u.get("status") or "approved"
-                face_status = u.get("face_enrollment_status") or ("enrolled" if u.get("face_descriptor") else "pending")
-                bio_status = u.get("biometric_enrollment_status") or ("enrolled" if u.get("biometric_credential_id") else "pending")
-        except Exception as e:
-            logger.warning(f"Student profile fetch note: {e}")
+    try:
+        user = db.query(User).filter(
+            or_(
+                func.upper(User.hall_ticket_no) == ht,
+                func.lower(User.email).like(f"{ht.lower()}@%")
+            )
+        ).first()
+        if user:
+            student_name = user.name or student_name
+            branch = user.branch or branch
+            section = user.section or section
+            year = int(user.year or 3)
+            email = user.email or ""
+            status_val = user.status or "approved"
+            face_status = user.face_enrollment_status or ("enrolled" if user.face_descriptor else "pending")
+            bio_status = user.biometric_enrollment_status or ("enrolled" if user.biometric_credential_id else "pending")
+    except Exception as e:
+        logger.warning(f"Student profile fetch note: {e}")
 
     # 2. Fetch real attendance records for this student
     student_records = []
-    if supabase_client:
-        try:
-            res = supabase_client.table("attendance_records").select("*").eq("hall_ticket_no", ht).order("marked_at", desc=True).execute()
-            if res.data:
-                student_records = res.data
-        except Exception as e:
-            logger.warning(f"Supabase query note: {e}")
+    try:
+        recs = (
+            db.query(AttendanceRecord)
+            .filter(func.upper(AttendanceRecord.hall_ticket_no) == ht)
+            .order_by(desc(AttendanceRecord.marked_at))
+            .all()
+        )
+        student_records = [r.to_dict() for r in recs]
+    except Exception as e:
+        logger.warning(f"PostgreSQL query note: {e}")
 
-    # Fallback to in-memory records
     if not student_records:
         student_records = [r for r in today_attendance_records if r.get("hallTicketNo") == ht or r.get("studentId") == ht]
 
     # 3. Total sessions conducted count (from attendance_sessions)
     total_sessions_conducted = 0
-    if supabase_client:
-        try:
-            sess_res = supabase_client.table("attendance_sessions").select("id").execute()
-            if sess_res.data:
-                total_sessions_conducted = len(sess_res.data)
-        except Exception:
-            pass
+    try:
+        total_sessions_conducted = db.query(func.count(AttendanceSession.id)).scalar() or 0
+    except Exception:
+        pass
 
     total_sessions_conducted = max(total_sessions_conducted, len(student_records))
     attended_count = len([r for r in student_records if r.get("status") in ["present", "late"]])
@@ -586,7 +654,7 @@ def get_student_attendance_history(hall_ticket: str):
         "branch": branch,
         "section": section,
         "year": year,
-        "status": status,
+        "status": status_val,
         "faceEnrollmentStatus": face_status,
         "biometricEnrollmentStatus": bio_status,
         "totalSessionsConducted": total_sessions_conducted,
@@ -598,16 +666,20 @@ def get_student_attendance_history(hall_ticket: str):
         "records": student_records
     }
 
+
 @router.post("/api/checkin/verify")
-async def verify_student_checkin(payload: VerifyCheckinPayload):
+async def verify_student_checkin(
+    payload: VerifyCheckinPayload,
+    db: Session = Depends(get_db)
+):
     """
     Public check-in submission (Fail-Closed):
-    1. Validates session token.
+    1. Validates session token against PostgreSQL and in-memory caches.
     2. Validates Hall Ticket format.
-    3. Enforces GPS Geofence boundary check (mandatory coordinates).
-    4. Enforces Face Embedding & Liveness matching (rejects unenrolled/mismatch).
+    3. Enforces GPS Geofence boundary check.
+    4. Enforces Face Embedding & Liveness matching.
     5. Checks and prevents duplicate check-ins for the session.
-    6. Persists record to database and broadcasts WebSocket event.
+    6. Persists record to PostgreSQL and broadcasts WebSocket event.
     """
     hall_ticket = payload.hallTicket.strip().upper()
     session_id = None
@@ -642,26 +714,34 @@ async def verify_student_checkin(payload: VerifyCheckinPayload):
         session_lng = current_session.get("faculty_lng") or session_lng
         session_radius = current_session.get("radius_meters") or session_radius
     else:
-        # Strategy 3: Check database active sessions
-        if supabase_client:
-            try:
-                res = supabase_client.table("attendance_sessions")\
-                    .select("*")\
-                    .eq("status", "active")\
-                    .order("created_at", desc=True)\
-                    .limit(1)\
-                    .execute()
-                if res.data and len(res.data) > 0:
-                    s = res.data[0]
-                    session_id = s.get("id")
-                    session_title = s.get("session_title", session_title)
-                    branch = s.get("branch", branch)
-                    section = s.get("section", section)
-                    session_lat = s.get("faculty_lat") or session_lat
-                    session_lng = s.get("faculty_lng") or session_lng
-                    session_radius = s.get("radius_meters") or session_radius
-            except Exception as e:
-                logger.warning(f"DB session check note: {e}")
+        # Strategy 3: Check PostgreSQL active sessions
+        try:
+            s = None
+            if normalized_token:
+                s = db.query(AttendanceSession).filter(
+                    AttendanceSession.qr_token == normalized_token,
+                    AttendanceSession.status == "active"
+                ).first()
+
+            if not s:
+                s = (
+                    db.query(AttendanceSession)
+                    .filter(AttendanceSession.status == "active")
+                    .order_by(desc(AttendanceSession.created_at))
+                    .first()
+                )
+
+            if s:
+                session_id = str(s.id)
+                session_title = s.session_title or session_title
+                branch = s.branch or branch
+                section = s.section or section
+                geo = s.geofence or {}
+                session_lat = geo.get("lat") or session_lat
+                session_lng = geo.get("lng") or session_lng
+                session_radius = s.radius_meters or session_radius
+        except Exception as e:
+            logger.warning(f"PostgreSQL session check note: {e}")
 
         # Strategy 4: Try JWT decode
         if not session_id and normalized_token:
@@ -675,7 +755,7 @@ async def verify_student_checkin(payload: VerifyCheckinPayload):
 
         # Strategy 5: Universal Active Campus Session Fallback
         if not session_id:
-            session_id = f"campus_sess_{datetime.utcnow().strftime('%Y%m%d')}"
+            session_id = f"campus_sess_{datetime.now(timezone.utc).strftime('%Y%m%d')}"
             session_title = "SBIT Innovation Centre Academic Session"
 
     # Auto-resolve student GPS coordinates to campus anchor if unavailable
@@ -683,34 +763,32 @@ async def verify_student_checkin(payload: VerifyCheckinPayload):
     student_lng = payload.lng if (payload.lng and payload.lng != 0) else session_lng
 
     # 2. Check for Duplicate Check-in
-    existing_dup = None
-    for rec in today_attendance_records:
-        if rec.get("hallTicketNo") == hall_ticket and (rec.get("sessionId") == session_id or not session_id):
-            existing_dup = rec
-            break
+    session_uuid = None
+    try:
+        session_uuid = uuid.UUID(str(session_id))
+    except Exception:
+        session_uuid = uuid.uuid4()
 
-    if not existing_dup and supabase_client:
-        try:
-            dup_check = supabase_client.table("attendance_records")\
-                .select("*")\
-                .eq("session_id", session_id)\
-                .eq("hall_ticket_no", hall_ticket)\
-                .limit(1)\
-                .execute()
-            if dup_check.data and len(dup_check.data) > 0:
-                r = dup_check.data[0]
-                existing_dup = {
-                    "id": r.get("id"),
-                    "sessionId": r.get("session_id"),
-                    "hallTicketNo": hall_ticket,
-                    "studentName": r.get("student_name") or payload.studentName or f"Student ({hall_ticket})",
-                    "markedAt": r.get("marked_at"),
-                    "status": r.get("status") or "present",
-                    "verificationMethod": r.get("verification_method") or "face_recognition",
-                    "alreadyMarked": True
-                }
-        except Exception as e:
-            logger.warning(f"Duplicate check query note: {e}")
+    existing_dup = None
+    try:
+        dup = db.query(AttendanceRecord).filter(
+            AttendanceRecord.session_id == session_uuid,
+            AttendanceRecord.hall_ticket_no == hall_ticket
+        ).first()
+
+        if dup:
+            existing_dup = {
+                "id": str(dup.id),
+                "sessionId": str(dup.session_id) if dup.session_id else None,
+                "hallTicketNo": hall_ticket,
+                "studentName": dup.student_name or payload.studentName or f"Student ({hall_ticket})",
+                "markedAt": dup.marked_at.isoformat() if dup.marked_at else None,
+                "status": dup.status or "present",
+                "verificationMethod": dup.verification_method or "face_recognition",
+                "alreadyMarked": True
+            }
+    except Exception as e:
+        logger.warning(f"Duplicate check query note: {e}")
 
     if existing_dup:
         return {
@@ -720,14 +798,13 @@ async def verify_student_checkin(payload: VerifyCheckinPayload):
             "record": existing_dup
         }
 
-    # 3. Geofence Distance Check (Temporary Faculty Session Location or Campus Boundary)
+    # 3. Geofence Distance Check
     distance_m = calculate_haversine_distance(
         payload.lat,
         payload.lng,
         session_lat,
         session_lng
     )
-    # Check campus baseline fallback as well
     campus_dist = calculate_haversine_distance(
         payload.lat,
         payload.lng,
@@ -741,12 +818,9 @@ async def verify_student_checkin(payload: VerifyCheckinPayload):
     face_match_confidence = 0.95
     face_distance = 0.10
     verification_method = "face_recognition"
-    face_verified = False
 
     if payload.biometricVerified:
-        # Device biometric (TouchID / Fingerprint) accepted - highest trust
         verification_method = "biometric_platform"
-        face_verified = True
         face_match_confidence = 0.99
     elif payload.faceDescriptor is not None:
         if len(payload.faceDescriptor) != 128:
@@ -777,8 +851,6 @@ async def verify_student_checkin(payload: VerifyCheckinPayload):
                 detail=f"Face verification rejected: Live face (similarity: {conf}%) does not match registered profile for Roll Number {hall_ticket}."
             )
 
-
-        face_verified = True
         verification_method = "face_recognition"
     else:
         raise HTTPException(
@@ -786,128 +858,93 @@ async def verify_student_checkin(payload: VerifyCheckinPayload):
             detail="faceDescriptor is required for facial check-in. Please use the face enrollment flow or biometric fallback."
         )
 
-    # Ensure session_id is a valid UUID for database foreign key integrity
-    session_uuid = None
+    # Ensure attendance_session exists in PostgreSQL to satisfy foreign key constraint
+    now_dt = datetime.now(timezone.utc)
     try:
-        uuid.UUID(str(session_id))
-        session_uuid = str(session_id)
-    except Exception:
-        session_uuid = str(uuid.uuid4())
-
-    # Ensure attendance_session exists in database to satisfy foreign key constraint
-    if supabase_client:
-        try:
-            sess_check = supabase_client.table("attendance_sessions").select("id").eq("id", session_uuid).execute()
-            if not sess_check.data or len(sess_check.data) == 0:
-                now_iso = datetime.utcnow().isoformat() + "Z"
-                end_iso = (datetime.utcnow() + timedelta(hours=2)).isoformat() + "Z"
-                supabase_client.table("attendance_sessions").insert([{
-                    "id": session_uuid,
-                    "session_title": session_title,
-                    "faculty_id": "faculty_201",
-                    "faculty_name": "Faculty Member",
-                    "branch": branch,
-                    "section": section,
-                    "room": "Innovation Centre Lab",
-                    "start_time": now_iso,
-                    "end_time": end_iso,
-                    "status": "active",
-                    "qr_token": normalized_token or str(uuid.uuid4()),
-                    "faculty_lat": session_lat,
-                    "faculty_lng": session_lng,
-                    "radius_meters": session_radius
-                }]).execute()
-        except Exception as e:
-            logger.warning(f"Auto session check/insert note: {e}")
+        sess_chk = db.query(AttendanceSession).filter_by(id=session_uuid).first()
+        if not sess_chk:
+            new_sess = AttendanceSession(
+                id=session_uuid,
+                session_title=session_title,
+                faculty_id="faculty_201",
+                faculty_name="Faculty Member",
+                branch=branch,
+                section=section,
+                room="Innovation Centre Lab",
+                start_time=now_dt,
+                end_time=now_dt + timedelta(hours=2),
+                status="active",
+                qr_token=normalized_token or str(uuid.uuid4()),
+                radius_meters=session_radius,
+                geofence={"lat": session_lat, "lng": session_lng}
+            )
+            db.add(new_sess)
+            db.commit()
+    except Exception as e:
+        logger.warning(f"Auto session check/insert note: {e}")
 
     # Look up student's real name and academic branch from users table
     real_student_name = payload.studentName
     real_branch = branch
     real_section = section
-    if supabase_client:
-        try:
-            u_res = supabase_client.table("users").select("name,branch,section").ilike("hall_ticket_no", hall_ticket).execute()
-            if u_res.data and len(u_res.data) > 0:
-                real_student_name = u_res.data[0].get("name") or real_student_name
-                real_branch = u_res.data[0].get("branch") or real_branch
-                real_section = u_res.data[0].get("section") or real_section
-            else:
-                u_res2 = supabase_client.table("users").select("name,branch,section").ilike("email", f"{hall_ticket.lower()}@%").execute()
-                if u_res2.data and len(u_res2.data) > 0:
-                    real_student_name = u_res2.data[0].get("name") or real_student_name
-                    real_branch = u_res2.data[0].get("branch") or real_branch
-                    real_section = u_res2.data[0].get("section") or real_section
-        except Exception as e:
-            logger.warning(f"Student name lookup error in checkin: {e}")
+    try:
+        u = db.query(User).filter(
+            or_(
+                func.upper(User.hall_ticket_no) == hall_ticket,
+                func.lower(User.email).like(f"{hall_ticket.lower()}@%")
+            )
+        ).first()
+        if u:
+            real_student_name = u.name or real_student_name
+            real_branch = u.branch or real_branch
+            real_section = u.section or real_section
+    except Exception as e:
+        logger.warning(f"Student name lookup error in checkin: {e}")
 
     if not real_student_name:
         real_student_name = f"Student ({hall_ticket})"
 
-    record = {
-        "id": str(uuid.uuid4()),
-        "sessionId": session_uuid,
-        "sessionTitle": session_title,
-        "studentId": hall_ticket,
-        "studentName": real_student_name,
-        "hallTicketNo": hall_ticket,
-        "branch": real_branch,
-        "section": real_section,
-        "year": 3,
-        "markedAt": datetime.utcnow().isoformat() + "Z",
-        "status": "present",
-        "verificationMethod": verification_method,
-        "faceMatchConfidence": face_match_confidence,
-        "faceDistance": face_distance,
-        "blinkVerified": bool(payload.blinkVerified),
-        "biometricVerified": bool(payload.biometricVerified),
-        "distanceM": distance_m,
-        "studentLat": student_lat,
-        "studentLng": student_lng,
-        "deviceId": "phone-checkin"
-    }
+    # 5. Write to PostgreSQL attendance_records table
+    new_rec = AttendanceRecord(
+        id=uuid.uuid4(),
+        session_id=session_uuid,
+        student_id=hall_ticket,
+        student_name=real_student_name,
+        hall_ticket_no=hall_ticket,
+        branch=real_branch,
+        section=real_section,
+        year=3,
+        status="present",
+        verification_method=verification_method,
+        face_match_confidence=face_match_confidence,
+        face_distance=face_distance,
+        blink_verified=bool(payload.blinkVerified),
+        biometric_verified=bool(payload.biometricVerified),
+        gps_distance_meters=distance_m,
+        student_lat=student_lat,
+        student_lng=student_lng,
+        marked_at=now_dt
+    )
+    db.add(new_rec)
+    db.commit()
+    db.refresh(new_rec)
 
-    # 5. Write to Supabase / PostgreSQL table
-    if supabase_client:
-        try:
-            supabase_client.table("attendance_records").insert([{
-                "id": record["id"],
-                "session_id": session_uuid,
-                "student_id": record["studentId"],
-                "student_name": record["studentName"],
-                "hall_ticket_no": record["hallTicketNo"],
-                "branch": record["branch"],
-                "section": record["section"],
-                "year": record["year"],
-                "status": record["status"],
-                "verification_method": record["verificationMethod"],
-                "face_match_confidence": record["faceMatchConfidence"],
-                "face_distance": record["faceDistance"],
-                "blink_verified": record["blinkVerified"],
-                "biometric_verified": record["biometricVerified"],
-                "gps_distance_meters": record["distanceM"],
-                "student_lat": record["studentLat"],
-                "student_lng": record["studentLng"],
-                "marked_at": record["markedAt"]
-            }]).execute()
-        except Exception as e:
-            logger.error(f"Supabase record insert error: {e}", exc_info=True)
-            print(f"Recorded locally in server memory: {record['id']}")
-
-    today_attendance_records.insert(0, record)
+    rec_dict = new_rec.to_dict()
+    today_attendance_records.insert(0, rec_dict)
 
     # 6. Emit real-time WebSocket event over Socket.io
     if sio_server:
         try:
             await sio_server.emit("attendance:new", {
-                "id": record["id"],
-                "name": record["studentName"],
-                "hallTicket": record["hallTicketNo"],
-                "department": record["branch"],
-                "timestamp": record["markedAt"],
-                "method": record["verificationMethod"],
-                "blinkVerified": record["blinkVerified"],
-                "similarity": record["faceMatchConfidence"],
-                "distanceM": record["distanceM"]
+                "id": str(new_rec.id),
+                "name": new_rec.student_name,
+                "hallTicket": new_rec.hall_ticket_no,
+                "department": new_rec.branch,
+                "timestamp": new_rec.marked_at.isoformat(),
+                "method": new_rec.verification_method,
+                "blinkVerified": new_rec.blink_verified,
+                "similarity": new_rec.face_match_confidence,
+                "distanceM": new_rec.gps_distance_meters
             })
         except Exception as e:
             logger.warning(f"Socket.IO emit note: {e}")
@@ -915,73 +952,71 @@ async def verify_student_checkin(payload: VerifyCheckinPayload):
     return {
         "success": True,
         "message": f"Attendance marked successfully for {hall_ticket}!",
-        "record": record
+        "record": rec_dict
     }
 
+
 @router.get("/api/attendance/today")
-def get_today_attendance():
+def get_today_attendance(db: Session = Depends(get_db)):
     """
-    Initial table load for the Live Attendance dashboard.
+    Initial table load for the Live Attendance dashboard from PostgreSQL.
     """
-    if supabase_client:
-        try:
-            today_start = datetime.utcnow().strftime("%Y-%m-%dT00:00:00Z")
-            res = supabase_client.table("attendance_records")\
-                .select("*")\
-                .gte("marked_at", today_start)\
-                .order("marked_at", desc=True)\
-                .execute()
-            if res.data and len(res.data) > 0:
-                return {
-                    "records": res.data,
-                    "count": len(res.data)
-                }
-            # Fallback to all recent records if today's UTC filter yielded 0
-            all_res = supabase_client.table("attendance_records")\
-                .select("*")\
-                .order("marked_at", desc=True)\
-                .limit(500)\
-                .execute()
-            if all_res.data:
-                return {
-                    "records": all_res.data,
-                    "count": len(all_res.data)
-                }
-        except Exception as e:
-            logger.warning(f"Error reading today attendance from DB: {e}")
+    try:
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        records = (
+            db.query(AttendanceRecord)
+            .filter(AttendanceRecord.marked_at >= today_start)
+            .order_by(desc(AttendanceRecord.marked_at))
+            .all()
+        )
+        if records:
+            data = [r.to_dict() for r in records]
+            return {"records": data, "count": len(data)}
+
+        # Fallback to all recent records if today's filter yielded 0
+        all_recs = (
+            db.query(AttendanceRecord)
+            .order_by(desc(AttendanceRecord.marked_at))
+            .limit(500)
+            .all()
+        )
+        data = [r.to_dict() for r in all_recs]
+        return {"records": data, "count": len(data)}
+    except Exception as e:
+        logger.warning(f"Error reading today attendance from PostgreSQL: {e}")
 
     return {
         "records": today_attendance_records,
         "count": len(today_attendance_records)
     }
 
+
 @router.get("/api/embeddings/sync", dependencies=[Depends(verify_edge_key)])
-def sync_embeddings():
+def sync_embeddings(db: Session = Depends(get_db)):
     """
     Edge device sync endpoint: returns all registered student embeddings to cache locally on the edge PC.
     Protected: Requires valid X-API-Key header.
     """
     embeddings_list = []
-    
-    # 1. From database
-    if supabase_client:
-        try:
-            res = supabase_client.table("users")\
-                .select("hall_ticket_no, face_descriptor, face_enrolled_at")\
-                .not_.is_("face_descriptor", "null")\
-                .execute()
-            if res.data:
-                for row in res.data:
-                    ht = row.get("hall_ticket_no")
-                    desc = row.get("face_descriptor")
-                    if ht and desc:
-                        embeddings_list.append({
-                            "studentId": ht,
-                            "faceDescriptor": desc,
-                            "updatedAt": row.get("face_enrolled_at")
-                        })
-        except Exception as e:
-            logger.error(f"Error querying student embeddings from DB: {e}")
+
+    # 1. From PostgreSQL users table
+    try:
+        users = (
+            db.query(User)
+            .filter(User.face_descriptor.isnot(None))
+            .all()
+        )
+        for u in users:
+            ht = u.hall_ticket_no
+            desc_val = u.face_descriptor
+            if ht and desc_val:
+                embeddings_list.append({
+                    "studentId": ht,
+                    "faceDescriptor": desc_val,
+                    "updatedAt": u.face_enrolled_at.isoformat() if u.face_enrolled_at else None
+                })
+    except Exception as e:
+        logger.error(f"Error querying student embeddings from PostgreSQL: {e}")
 
     # 2. From in-memory cache if not already included
     existing_ids = {e["studentId"] for e in embeddings_list}
@@ -995,8 +1030,6 @@ def sync_embeddings():
 
     return {
         "count": len(embeddings_list),
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "embeddings": embeddings_list
     }
-
-

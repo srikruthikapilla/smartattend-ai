@@ -13,7 +13,6 @@ import {
 } from "../types/attendance";
 import { initialAttendanceRecords, initialAuditLogs, generateSeedAttendanceRecords } from "../utils/seedData";
 import { verifyPlatformBiometrics } from "../utils/webauthnBiometrics";
-import { supabase } from "../config/supabase";
 import { io } from "socket.io-client";
 
 interface AttendanceContextType {
@@ -211,91 +210,49 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         console.warn("Backend records fetch note:", err);
       }
 
-      // 2. Fetch Geofence & Active Session from Supabase if connected
-      if (supabase) {
-        try {
-          const { data: geoData } = await supabase.from('geofence_config').select('*').limit(1).single();
-          if (geoData) {
+      // 2. Fetch Geofence & Active Session from Backend API
+      try {
+        const geoRes = await fetch('/api/admin/geofence');
+        if (geoRes.ok) {
+          const geoData = await geoRes.json();
+          if (geoData.geofence) {
             setGeofence({
-              latitude: geoData.center_lat || 17.2472,
-              longitude: geoData.center_lng || 80.1514,
-              radiusMeters: geoData.radius_m || 150
+              latitude: geoData.geofence.center_lat || 17.2472,
+              longitude: geoData.geofence.center_lng || 80.1514,
+              radiusMeters: geoData.geofence.radius_m || 150
             });
           }
-
-          const { data: sessData } = await supabase
-            .from('attendance_sessions')
-            .select('*')
-            .eq('status', 'active')
-            .order('created_at', { ascending: false })
-            .limit(1);
-
-          if (sessData && sessData.length > 0) {
-            const s = sessData[0];
-            if (new Date(s.end_time) > new Date()) {
-              setActiveSession({
-                sessionId: s.id,
-                sessionTitle: s.session_title,
-                facultyId: s.faculty_id,
-                facultyName: s.faculty_name,
-                branch: s.branch,
-                section: s.section,
-                year: s.year,
-                room: s.room,
-                startTime: s.start_time,
-                endTime: s.end_time,
-                status: s.status,
-                qrToken: s.qr_token || '',
-                radiusMeters: s.radius_meters || 150
-              });
-              if (s.qr_token) setQrToken(s.qr_token);
-            }
-          }
-
-          if (!recordsLoaded) {
-            const { data: recsData } = await supabase
-              .from('attendance_records')
-              .select('*')
-              .order('marked_at', { ascending: false })
-              .limit(500);
-
-            if (recsData) {
-              const mapped: AttendanceRecord[] = recsData.map(r => ({
-                recordId: r.id,
-                sessionId: r.session_id,
-                studentId: r.student_id,
-                studentName: r.student_name,
-                hallTicketNo: r.hall_ticket_no,
-                branch: r.branch,
-                section: r.section,
-                year: r.year,
-                markedAt: r.marked_at,
-                status: r.status,
-                verificationMethod: r.verification_method,
-                faceMatchConfidence: r.face_match_confidence,
-                faceDistance: r.face_distance,
-                blinkVerified: r.blink_verified,
-                biometricVerified: r.biometric_verified,
-                gpsDistanceMeters: r.gps_distance_meters,
-                studentLat: r.student_lat,
-                studentLng: r.student_lng,
-                manualReason: r.manual_reason,
-                markedBy: r.marked_by
-              }));
-
-              setAttendanceRecords(prev => {
-                const map = new Map<string, AttendanceRecord>();
-                mapped.forEach(item => map.set(item.recordId, item));
-                prev.forEach(item => {
-                  if (!map.has(item.recordId)) map.set(item.recordId, item);
-                });
-                return Array.from(map.values()).sort((a, b) => new Date(b.markedAt).getTime() - new Date(a.markedAt).getTime());
-              });
-            }
-          }
-        } catch (err) {
-          console.warn("Supabase initial sync notice:", err);
         }
+      } catch (err) {
+        console.warn("Geofence fetch notice:", err);
+      }
+
+      try {
+        const sessRes = await fetch('/api/qr-session/current');
+        if (sessRes.ok) {
+          const sessJson = await sessRes.json();
+          if (sessJson.active && sessJson.session) {
+            const s = sessJson.session;
+            setActiveSession({
+              sessionId: s.sessionId,
+              sessionTitle: s.sessionTitle,
+              facultyId: s.facultyId,
+              facultyName: s.facultyName,
+              branch: s.branch,
+              section: s.section,
+              year: s.year || 3,
+              room: s.room,
+              startTime: s.createdAt || new Date().toISOString(),
+              endTime: new Date(Date.now() + (sessJson.secondsRemaining || 120) * 1000).toISOString(),
+              status: "active",
+              qrToken: s.token || s.raw_token || '',
+              radiusMeters: s.radius_meters || 150
+            });
+            if (s.token || s.raw_token) setQrToken(s.token || s.raw_token);
+          }
+        }
+      } catch (err) {
+        console.warn("Session check notice:", err);
       }
     };
 
@@ -405,26 +362,22 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       geofence: dynamicGeofence
     };
 
-    // Save to Supabase if connected
-    if (supabase) {
-      supabase.from('attendance_sessions').insert([{
-        id: session.sessionId,
-        session_title: session.sessionTitle,
-        faculty_id: session.facultyId,
-        faculty_name: session.facultyName,
+    // Sync session to backend API
+    fetch('/api/qr-session/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        facultyId: session.facultyId,
+        facultyName: session.facultyName,
+        sessionTitle: session.sessionTitle,
         branch: session.branch,
         section: session.section,
-        year: session.year,
         room: session.room,
-        start_time: session.startTime,
-        end_time: session.endTime,
-        status: 'active',
-        qr_token: newToken,
-        radius_meters: sessionRadius,
-        faculty_lat: sessionLat,
-        faculty_lng: sessionLng
-      }]).then();
-    }
+        latitude: sessionLat,
+        longitude: sessionLng,
+        radiusMeters: sessionRadius
+      })
+    }).catch(err => console.warn("Backend session start notice:", err));
 
     setActiveSession(session);
     setQrToken(newToken);
@@ -447,12 +400,7 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const terminateSession = () => {
     if (!activeSession) return;
 
-    // Update in Supabase
-    if (supabase) {
-      supabase.from('attendance_sessions').update({
-        status: 'ended'
-      }).eq('id', activeSession.sessionId).then();
-    }
+
 
     setAuditLogs(prev => [
       {
@@ -717,16 +665,7 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       return updated;
     });
 
-    if (supabase && activeSession?.sessionId) {
-      supabase.from('attendance_sessions').update({
-        session_title: updates.sessionTitle,
-        room: updates.room,
-        branch: updates.branch,
-        section: updates.section,
-        year: updates.year,
-        radius_meters: updates.radiusMeters
-      }).eq('id', activeSession.sessionId).then();
-    }
+
   };
 
   const toggleAttendance = async (
@@ -879,43 +818,6 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       console.warn("Backend records refresh note:", e);
     }
 
-    if (!loaded && supabase) {
-      try {
-        const { data: recsData } = await supabase
-          .from('attendance_records')
-          .select('*')
-          .order('marked_at', { ascending: false })
-          .limit(500);
-
-        if (recsData) {
-          const mapped: AttendanceRecord[] = recsData.map(r => ({
-            recordId: r.id,
-            sessionId: r.session_id,
-            studentId: r.student_id,
-            studentName: r.student_name,
-            hallTicketNo: r.hall_ticket_no,
-            branch: r.branch,
-            section: r.section,
-            year: r.year,
-            markedAt: r.marked_at,
-            status: r.status,
-            verificationMethod: r.verification_method,
-            faceMatchConfidence: r.face_match_confidence,
-            faceDistance: r.face_distance,
-            blinkVerified: r.blink_verified,
-            biometricVerified: r.biometric_verified,
-            gpsDistanceMeters: r.gps_distance_meters,
-            studentLat: r.student_lat,
-            studentLng: r.student_lng,
-            manualReason: r.manual_reason,
-            markedBy: r.marked_by
-          }));
-          setAttendanceRecords(mapped);
-        }
-      } catch (e) {
-        console.warn("Live refresh error:", e);
-      }
-    }
   };
 
   // Periodic polling for real-time live synchronization

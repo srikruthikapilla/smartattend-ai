@@ -21,8 +21,8 @@ CREATE TABLE IF NOT EXISTS users (
     college VARCHAR(255) DEFAULT 'Swarna Bharathi Institute of Science and Technology (SBIT)',
     status VARCHAR(50) NOT NULL DEFAULT 'approved' CHECK (status IN ('pending', 'approved', 'rejected', 'suspended')),
     
-    -- Student Academic Fields (Hall ticket format: 10 chars, starting with 2 e.g. 21SBIT0501)
-    hall_ticket_no VARCHAR(10) CONSTRAINT check_hall_ticket_format CHECK (hall_ticket_no IS NULL OR hall_ticket_no ~* '^2[0-9A-Za-z]{9}$'),
+    -- Student Academic Fields (Hall ticket format: 10 chars, unique per student)
+    hall_ticket_no VARCHAR(10) UNIQUE CONSTRAINT check_hall_ticket_format CHECK (hall_ticket_no IS NULL OR hall_ticket_no ~* '^2[0-9A-Za-z]{9}$'),
     branch VARCHAR(50),
     section VARCHAR(10),
     year VARCHAR(10) DEFAULT '1',
@@ -148,7 +148,7 @@ CREATE TABLE IF NOT EXISTS settings (
 -- 8. INDEXES FOR PERFORMANCE
 -- ============================================================================
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_users_hall_ticket ON users(hall_ticket_no);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_hall_ticket_unique ON users(UPPER(hall_ticket_no)) WHERE hall_ticket_no IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_attendance_records_session ON attendance_records(session_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_records_student ON attendance_records(student_id);

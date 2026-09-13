@@ -1,17 +1,33 @@
+"""
+Smart Attend — Attendance Records & Facial Recognition Routes
+==============================================================
+All attendance records, capture logs, and sessions are stored in PostgreSQL.
+Socket.io is used for real-time live attendance broadcasting.
+"""
+
 import uuid
 import logging
 from fastapi import APIRouter, HTTPException, Body, Depends
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
+
+from sqlalchemy.orm import Session
+from sqlalchemy import desc
+
 from app.models.schemas import (
     VerifyFaceDirectPayload,
     AttendanceCaptureRequest,
     AttendanceOverrideRequest
 )
-from app.utils.face_matcher import compare_face_embeddings
-from app.services.face_recognition_service import face_service
-from app.database import supabase_client
+from app.models.db_models import (
+    AttendanceRecord,
+    AttendanceSession,
+    AttendanceCaptureLog,
+    AuditLog
+)
+from app.database import get_db, get_db_context
 from app.dependencies.auth import get_current_user, get_optional_current_user, require_role
+from app.services.face_recognition_service import face_service
 
 logger = logging.getLogger(__name__)
 
@@ -24,144 +40,150 @@ def set_sio_server(sio):
     global sio_server
     sio_server = sio
 
-def get_or_create_valid_session_id(preferred_session_id: Optional[str] = None, branch: str = "CSM", section: str = "A") -> str:
+
+def get_or_create_valid_session_id(
+    preferred_session_id: Optional[str] = None,
+    branch: str = "CSM",
+    section: str = "A",
+    db: Optional[Session] = None
+) -> str:
     """
     Ensures a valid UUID exists in attendance_sessions table to satisfy PostgreSQL foreign keys.
     """
-    if not supabase_client:
-        return str(uuid.uuid4())
+    def _lookup_or_create(session: Session) -> str:
+        # 1. If preferred ID given, check if it exists in DB
+        if preferred_session_id:
+            try:
+                target_uuid = uuid.UUID(str(preferred_session_id))
+                chk = session.query(AttendanceSession).filter_by(id=target_uuid).first()
+                if chk:
+                    return str(chk.id)
+            except Exception:
+                pass
 
-    # 1. If preferred ID is given, check if it exists in DB
-    if preferred_session_id:
+        # 2. Check for any active session
         try:
-            uuid.UUID(str(preferred_session_id))
-            chk = supabase_client.table("attendance_sessions").select("id").eq("id", str(preferred_session_id)).execute()
-            if chk.data and len(chk.data) > 0:
-                return str(preferred_session_id)
+            act = (
+                session.query(AttendanceSession)
+                .filter_by(status="active")
+                .order_by(desc(AttendanceSession.created_at))
+                .first()
+            )
+            if act:
+                return str(act.id)
         except Exception:
             pass
 
-    # 2. Check for any active session
-    try:
-        act = supabase_client.table("attendance_sessions").select("id").eq("status", "active").order("created_at", desc=True).limit(1).execute()
-        if act.data and len(act.data) > 0:
-            return act.data[0]["id"]
-    except Exception:
-        pass
+        # 3. Create a valid active session
+        new_session = AttendanceSession(
+            id=uuid.uuid4(),
+            session_title="SBIT Real-Time Academic Session",
+            faculty_id="faculty_101",
+            faculty_name="Faculty Incharge",
+            branch=branch,
+            section=section,
+            room="Innovation Centre Lab",
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc) + timedelta(hours=24),
+            status="active",
+            qr_token=str(uuid.uuid4()),
+            radius_meters=150
+        )
+        session.add(new_session)
+        session.commit()
+        return str(new_session.id)
 
-    # 3. Create a valid active session
-    new_id = str(uuid.uuid4())
-    try:
-        now_iso = datetime.utcnow().isoformat() + "Z"
-        end_iso = (datetime.utcnow() + timedelta(hours=24)).isoformat() + "Z"
-        supabase_client.table("attendance_sessions").insert([{
-            "id": new_id,
-            "session_title": "SBIT Real-Time Academic Session",
-            "faculty_id": "faculty_101",
-            "faculty_name": "Faculty Incharge",
-            "branch": branch,
-            "section": section,
-            "room": "Innovation Centre Lab",
-            "start_time": now_iso,
-            "end_time": end_iso,
-            "status": "active",
-            "qr_token": str(uuid.uuid4()),
-            "radius_meters": 150
-        }]).execute()
-        return new_id
-    except Exception as e:
-        logger.warning(f"Auto-create session note: {e}")
-        return new_id
+    if db:
+        return _lookup_or_create(db)
+    else:
+        with get_db_context() as session:
+            return _lookup_or_create(session)
+
 
 @router.get("/records")
-def get_all_attendance_records():
+def get_all_attendance_records(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """
-    Retrieve all attendance records from PostgreSQL / Supabase for live roster and dashboard sync.
-    Public/Staff accessible.
+    Retrieve all attendance records from PostgreSQL for live roster and dashboard sync.
+    Requires authenticated session.
     """
-    records = []
-    if supabase_client:
-        try:
-            res = supabase_client.table("attendance_records")\
-                .select("*")\
-                .order("marked_at", desc=True)\
-                .limit(500)\
-                .execute()
-            if res.data:
-                records = res.data
-        except Exception as e:
-            logger.warning(f"Error fetching attendance records from DB: {e}")
-
+    records = (
+        db.query(AttendanceRecord)
+        .order_by(desc(AttendanceRecord.marked_at))
+        .limit(500)
+        .all()
+    )
+    records_dict = [r.to_dict() for r in records]
     return {
         "success": True,
-        "count": len(records),
-        "records": records
+        "count": len(records_dict),
+        "records": records_dict
     }
 
+
 @router.get("/date/{target_date}")
-def get_attendance_by_date(target_date: str):
+def get_attendance_by_date(
+    target_date: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """
     Retrieve attendance records and capture logs for a specific calendar date (YYYY-MM-DD).
     Includes summary metrics (present count, late count, review needed flags).
+    Requires authenticated session.
     """
-    records = []
-    capture_logs = []
     try:
-        # Validate format
-        datetime.strptime(target_date, "%Y-%m-%d")
+        dt = datetime.strptime(target_date, "%Y-%m-%d")
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Expected YYYY-MM-DD.")
 
-    start_iso = f"{target_date}T00:00:00Z"
-    end_iso = f"{target_date}T23:59:59Z"
+    start_dt = datetime(dt.year, dt.month, dt.day, 0, 0, 0, tzinfo=timezone.utc)
+    end_dt = datetime(dt.year, dt.month, dt.day, 23, 59, 59, tzinfo=timezone.utc)
 
-    if supabase_client:
-        try:
-            res = supabase_client.table("attendance_records")\
-                .select("*")\
-                .gte("marked_at", start_iso)\
-                .lte("marked_at", end_iso)\
-                .order("marked_at", desc=True)\
-                .execute()
-            if res.data:
-                records = res.data
-        except Exception as e:
-            logger.warning(f"Error fetching records by date: {e}")
+    records = (
+        db.query(AttendanceRecord)
+        .filter(AttendanceRecord.marked_at >= start_dt)
+        .filter(AttendanceRecord.marked_at <= end_dt)
+        .order_by(desc(AttendanceRecord.marked_at))
+        .all()
+    )
+    records_data = [r.to_dict() for r in records]
 
-        try:
-            log_res = supabase_client.table("attendance_capture_logs")\
-                .select("*")\
-                .gte("created_at", start_iso)\
-                .lte("created_at", end_iso)\
-                .order("created_at", desc=True)\
-                .execute()
-            if log_res.data:
-                capture_logs = log_res.data
-        except Exception as e:
-            logger.warning(f"Error fetching capture logs by date: {e}")
+    capture_logs = (
+        db.query(AttendanceCaptureLog)
+        .filter(AttendanceCaptureLog.created_at >= start_dt)
+        .filter(AttendanceCaptureLog.created_at <= end_dt)
+        .order_by(desc(AttendanceCaptureLog.created_at))
+        .all()
+    )
+    capture_logs_data = [l.to_dict() for l in capture_logs]
 
-    present_count = sum(1 for r in records if r.get("status") == "present")
-    late_count = sum(1 for r in records if r.get("status") == "late")
-    absent_count = sum(1 for r in records if r.get("status") == "absent")
+    present_count = sum(1 for r in records_data if r.get("status") == "present")
+    late_count = sum(1 for r in records_data if r.get("status") == "late")
+    absent_count = sum(1 for r in records_data if r.get("status") == "absent")
 
     return {
         "success": True,
         "date": target_date,
         "summary": {
-            "totalMarked": len(records),
+            "totalMarked": len(records_data),
             "presentCount": present_count,
             "lateCount": late_count,
             "absentCount": absent_count,
-            "captureLogsCount": len(capture_logs)
+            "captureLogsCount": len(capture_logs_data)
         },
-        "records": records,
-        "captureLogs": capture_logs
+        "records": records_data,
+        "captureLogs": capture_logs_data
     }
+
 
 @router.post("/capture")
 async def capture_attendance(
     payload: AttendanceCaptureRequest,
-    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     Unified Facial Recognition Capture Endpoint.
@@ -169,15 +191,16 @@ async def capture_attendance(
     1. Single-student Kiosk WebRTC capture (with EAR blink liveness).
     2. Multi-face Classroom Group Scan (detects all students in classroom image, matches against enrolled database).
     """
-    session_id = get_or_create_valid_session_id(payload.sessionId, "CSE", "A")
-    now_iso = datetime.utcnow().isoformat() + "Z"
+    session_id_str = get_or_create_valid_session_id(payload.sessionId, "CSE", "A", db=db)
+    session_uuid = uuid.UUID(session_id_str)
+    now_dt = datetime.now(timezone.utc)
     performer = current_user.get("email") if current_user else "kiosk_system"
 
     # --- Mode 1: Multi-face Classroom Group Scan ---
     if payload.detectedFaces and len(payload.detectedFaces) > 0:
         face_items = [f.model_dump() for f in payload.detectedFaces]
         match_results = face_service.match_classroom_group_faces(face_items, threshold=0.44)
-        
+
         marked_records = []
         newly_present = []
 
@@ -185,73 +208,68 @@ async def capture_attendance(
             ht = item.get("hallTicket")
             conf = item.get("confidencePct", 0)
             is_matched = item.get("matched", False)
-            status = item.get("status", "unmatched")
+            status_val = item.get("status", "unmatched")
             box = item.get("boundingBox")
 
             # 1. Write to attendance_capture_logs for auditing
-            log_entry = {
-                "id": str(uuid.uuid4()),
-                "session_id": session_id,
-                "student_id": item.get("studentId") or ht or "UNKNOWN",
-                "hall_ticket_no": ht or "UNKNOWN",
-                "capture_source": payload.source or "classroom_group_scan",
-                "confidence_score": conf / 100.0,
-                "liveness_score": item.get("livenessScore", 1.0),
-                "bounding_box": box,
-                "reviewed_by_teacher": not item.get("needsReview", False),
-                "created_at": now_iso
-            }
-
-            if supabase_client:
-                try:
-                    supabase_client.table("attendance_capture_logs").insert([log_entry]).execute()
-                except Exception as log_err:
-                    logger.warning(f"Error logging capture log: {log_err}")
+            log_entry = AttendanceCaptureLog(
+                id=uuid.uuid4(),
+                session_id=session_uuid,
+                student_id=item.get("studentId") or ht or "UNKNOWN",
+                hall_ticket_no=ht or "UNKNOWN",
+                capture_source=payload.source or "classroom_group_scan",
+                confidence_score=conf / 100.0,
+                liveness_score=item.get("livenessScore", 1.0),
+                bounding_box=box,
+                reviewed_by_teacher=not item.get("needsReview", False),
+                created_at=now_dt
+            )
+            db.add(log_entry)
 
             # 2. If matched and verified, mark attendance
-            if is_matched and ht and status == "present":
-                rec = {
-                    "id": str(uuid.uuid4()),
-                    "session_id": session_id,
-                    "student_id": item.get("studentId") or ht,
-                    "student_name": item.get("studentName", f"Student ({ht})"),
-                    "hall_ticket_no": ht,
-                    "branch": "CSE",
-                    "section": "A",
-                    "year": 3,
-                    "status": "present",
-                    "verification_method": "face_recognition",
-                    "face_match_confidence": round(conf / 100.0, 4),
-                    "face_distance": item.get("distance", 0.1),
-                    "blink_verified": True,
-                    "biometric_verified": True,
-                    "gps_distance_meters": 5,
-                    "student_lat": payload.lat or 17.2472,
-                    "student_lng": payload.lng or 80.1514,
-                    "marked_at": now_iso,
-                    "manual_reason": f"Classroom Group Scan ({conf}% match)",
-                    "marked_by": performer
-                }
+            if is_matched and ht and status_val == "present":
+                # Clear existing record for this session & hall ticket
+                db.query(AttendanceRecord).filter(
+                    AttendanceRecord.hall_ticket_no == ht
+                ).delete()
 
-                if supabase_client:
-                    try:
-                        # Clear existing record for this student and insert new
-                        supabase_client.table("attendance_records").delete().eq("hall_ticket_no", ht).execute()
-                        supabase_client.table("attendance_records").insert([rec]).execute()
-                    except Exception as db_e:
-                        logger.error(f"Error inserting group scan record: {db_e}")
-
-                marked_records.append(rec)
+                rec = AttendanceRecord(
+                    id=uuid.uuid4(),
+                    session_id=session_uuid,
+                    student_id=item.get("studentId") or ht,
+                    student_name=item.get("studentName", f"Student ({ht})"),
+                    hall_ticket_no=ht,
+                    branch="CSE",
+                    section="A",
+                    year=3,
+                    status="present",
+                    verification_method="face_recognition",
+                    face_match_confidence=round(conf / 100.0, 4),
+                    face_distance=item.get("distance", 0.1),
+                    blink_verified=True,
+                    biometric_verified=True,
+                    gps_distance_meters=5,
+                    student_lat=payload.lat or 17.2472,
+                    student_lng=payload.lng or 80.1514,
+                    marked_at=now_dt,
+                    manual_reason=f"Classroom Group Scan ({conf}% match)",
+                    marked_by=performer
+                )
+                db.add(rec)
+                rec_dict = rec.to_dict()
+                marked_records.append(rec_dict)
                 newly_present.append({
-                    "id": rec["id"],
-                    "name": rec["student_name"],
+                    "id": str(rec.id),
+                    "name": rec.student_name,
                     "hallTicket": ht,
                     "department": "CSE",
                     "status": "present",
-                    "timestamp": now_iso,
+                    "timestamp": now_dt.isoformat(),
                     "method": "face_recognition",
                     "confidence": conf
                 })
+
+        db.commit()
 
         # Broadcast live updates to faculty dashboard
         if sio_server and newly_present:
@@ -293,45 +311,48 @@ async def capture_attendance(
                 detail=f"Face matching failed ({conf}% similarity). Live face does not match enrolled profile."
             )
 
-        rec = {
-            "id": str(uuid.uuid4()),
-            "session_id": session_id,
-            "student_id": match_res.get("studentId") or ht,
-            "student_name": match_res.get("studentName") or f"Student ({ht})",
-            "hall_ticket_no": ht,
-            "branch": "CSE",
-            "section": "A",
-            "year": 3,
-            "status": "present",
-            "verification_method": "face_recognition",
-            "face_match_confidence": round(conf / 100.0, 4),
-            "face_distance": match_res.get("distance", 0.1),
-            "blink_verified": bool(payload.blinkVerified),
-            "biometric_verified": True,
-            "gps_distance_meters": 5,
-            "student_lat": payload.lat or 17.2472,
-            "student_lng": payload.lng or 80.1514,
-            "marked_at": now_iso,
-            "manual_reason": f"Kiosk WebRTC Scan ({conf}% match)",
-            "marked_by": performer
-        }
+        # Clear existing record for this student
+        db.query(AttendanceRecord).filter(
+            AttendanceRecord.hall_ticket_no == ht
+        ).delete()
 
-        if supabase_client:
-            try:
-                supabase_client.table("attendance_records").delete().eq("hall_ticket_no", ht).execute()
-                supabase_client.table("attendance_records").insert([rec]).execute()
-            except Exception as e:
-                logger.error(f"Error persisting kiosk check-in: {e}")
+        rec = AttendanceRecord(
+            id=uuid.uuid4(),
+            session_id=session_uuid,
+            student_id=match_res.get("studentId") or ht,
+            student_name=match_res.get("studentName") or f"Student ({ht})",
+            hall_ticket_no=ht,
+            branch="CSE",
+            section="A",
+            year=3,
+            status="present",
+            verification_method="face_recognition",
+            face_match_confidence=round(conf / 100.0, 4),
+            face_distance=match_res.get("distance", 0.1),
+            blink_verified=bool(payload.blinkVerified),
+            biometric_verified=True,
+            gps_distance_meters=5,
+            student_lat=payload.lat or 17.2472,
+            student_lng=payload.lng or 80.1514,
+            marked_at=now_dt,
+            manual_reason=f"Kiosk WebRTC Scan ({conf}% match)",
+            marked_by=performer
+        )
+        db.add(rec)
+        db.commit()
+        db.refresh(rec)
+
+        rec_dict = rec.to_dict()
 
         if sio_server:
             try:
                 await sio_server.emit("attendance:new", {
-                    "id": rec["id"],
-                    "name": rec["student_name"],
+                    "id": str(rec.id),
+                    "name": rec.student_name,
                     "hallTicket": ht,
                     "department": "CSE",
                     "status": "present",
-                    "timestamp": now_iso,
+                    "timestamp": now_dt.isoformat(),
                     "method": "face_recognition"
                 })
             except Exception:
@@ -343,17 +364,19 @@ async def capture_attendance(
             "matched": True,
             "confidencePct": conf,
             "hallTicket": ht,
-            "record": rec
+            "record": rec_dict
         }
 
     raise HTTPException(status_code=400, detail="Either detectedFaces or liveDescriptor must be provided.")
+
 
 @router.patch("/{record_id}/override")
 @router.patch("/override/{record_id}")
 async def override_attendance_record(
     record_id: str,
     payload: AttendanceOverrideRequest,
-    current_user: Dict[str, Any] = Depends(require_role(["faculty", "admin"]))
+    current_user: Dict[str, Any] = Depends(require_role(["faculty", "admin"])),
+    db: Session = Depends(get_db)
 ):
     """
     Teacher/Admin Manual Override for Attendance Match Correction.
@@ -366,33 +389,28 @@ async def override_attendance_record(
 
     performer = str(current_user.get("email") or current_user.get("id") or "faculty")
 
-    updated_record = None
+    try:
+        rec_uuid = uuid.UUID(record_id)
+        record = db.query(AttendanceRecord).filter_by(id=rec_uuid).first()
+    except Exception:
+        record = db.query(AttendanceRecord).filter(AttendanceRecord.id == record_id).first()
 
-    if supabase_client:
-        try:
-            # 1. Update record in database
-            res = supabase_client.table("attendance_records")\
-                .update({
-                    "status": target_status,
-                    "manual_reason": f"Teacher Override: {payload.reason}",
-                    "marked_by": performer,
-                    "verification_method": "manual"
-                })\
-                .eq("id", record_id)\
-                .execute()
+    if not record:
+        raise HTTPException(status_code=404, detail="Attendance record not found.")
 
-            if res.data and len(res.data) > 0:
-                updated_record = res.data[0]
-        except Exception as e:
-            logger.error(f"Database error during override: {e}")
-            raise HTTPException(status_code=500, detail="Database failure during override update.")
+    record.status = target_status
+    record.manual_reason = f"Teacher Override: {payload.reason}"
+    record.marked_by = performer
+    record.verification_method = "manual"
+    db.commit()
+    db.refresh(record)
 
-    # 2. Emit WebSocket event
-    if sio_server and updated_record:
+    # Emit WebSocket event
+    if sio_server:
         try:
             await sio_server.emit("attendance:update", {
                 "id": record_id,
-                "hallTicket": updated_record.get("hall_ticket_no"),
+                "hallTicket": record.hall_ticket_no,
                 "status": target_status,
                 "manualReason": payload.reason,
                 "performer": performer
@@ -408,11 +426,17 @@ async def override_attendance_record(
         "overrideReason": payload.reason
     }
 
+
 @router.post("/toggle")
-async def toggle_student_attendance(payload: Dict[str, Any] = Body(...)):
+async def toggle_student_attendance(
+    payload: Dict[str, Any] = Body(...),
+    current_user: Dict[str, Any] = Depends(require_role(["faculty", "admin"])),
+    db: Session = Depends(get_db)
+):
     """
     Inline toggle attendance endpoint (Present / Late / Absent).
-    Directly updates PostgreSQL / Supabase and emits live WebSocket event.
+    Directly updates PostgreSQL and emits live WebSocket event.
+    Requires Faculty or Admin authorization.
     """
     student_id = payload.get("studentId") or payload.get("hallTicketNo") or ""
     hall_ticket = (payload.get("hallTicketNo") or student_id).strip().upper()
@@ -423,18 +447,15 @@ async def toggle_student_attendance(payload: Dict[str, Any] = Body(...)):
     year = int(payload.get("year") or 3)
     session_id = payload.get("sessionId")
 
-    session_uuid = get_or_create_valid_session_id(session_id, branch, section)
-    now_iso = datetime.utcnow().isoformat() + "Z"
+    session_uuid_str = get_or_create_valid_session_id(session_id, branch, section, db=db)
+    session_uuid = uuid.UUID(session_uuid_str)
+    now_dt = datetime.now(timezone.utc)
 
     if target_status == "absent":
-        if supabase_client:
-            try:
-                supabase_client.table("attendance_records")\
-                    .delete()\
-                    .eq("hall_ticket_no", hall_ticket)\
-                    .execute()
-            except Exception as e:
-                logger.warning(f"Error deleting record: {e}")
+        db.query(AttendanceRecord).filter(
+            AttendanceRecord.hall_ticket_no == hall_ticket
+        ).delete()
+        db.commit()
 
         if sio_server:
             try:
@@ -452,45 +473,47 @@ async def toggle_student_attendance(payload: Dict[str, Any] = Body(...)):
             "hallTicket": hall_ticket
         }
     else:
-        record_id = str(uuid.uuid4())
-        record = {
-            "id": record_id,
-            "session_id": session_uuid,
-            "student_id": student_id,
-            "student_name": student_name,
-            "hall_ticket_no": hall_ticket,
-            "branch": branch,
-            "section": section,
-            "year": year,
-            "status": target_status,
-            "verification_method": "manual",
-            "face_match_confidence": 1.0,
-            "face_distance": 0.0,
-            "blink_verified": True,
-            "biometric_verified": True,
-            "gps_distance_meters": 5,
-            "student_lat": 17.2472,
-            "student_lng": 80.1514,
-            "marked_at": now_iso,
-            "manual_reason": "Inline Roster Toggle"
-        }
+        # Delete existing record
+        db.query(AttendanceRecord).filter(
+            AttendanceRecord.hall_ticket_no == hall_ticket
+        ).delete()
 
-        if supabase_client:
-            try:
-                supabase_client.table("attendance_records").delete().eq("hall_ticket_no", hall_ticket).execute()
-                supabase_client.table("attendance_records").insert([record]).execute()
-            except Exception as e:
-                logger.error(f"Error upserting attendance record: {e}")
+        record = AttendanceRecord(
+            id=uuid.uuid4(),
+            session_id=session_uuid,
+            student_id=student_id,
+            student_name=student_name,
+            hall_ticket_no=hall_ticket,
+            branch=branch,
+            section=section,
+            year=year,
+            status=target_status,
+            verification_method="manual",
+            face_match_confidence=1.0,
+            face_distance=0.0,
+            blink_verified=True,
+            biometric_verified=True,
+            gps_distance_meters=5,
+            student_lat=17.2472,
+            student_lng=80.1514,
+            marked_at=now_dt,
+            manual_reason="Inline Roster Toggle"
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+
+        rec_dict = record.to_dict()
 
         if sio_server:
             try:
                 await sio_server.emit("attendance:new", {
-                    "id": record["id"],
-                    "name": record["student_name"],
-                    "hallTicket": record["hall_ticket_no"],
-                    "department": record["branch"],
+                    "id": str(record.id),
+                    "name": record.student_name,
+                    "hallTicket": record.hall_ticket_no,
+                    "department": record.branch,
                     "status": target_status,
-                    "timestamp": record["marked_at"],
+                    "timestamp": record.marked_at.isoformat(),
                     "method": "manual"
                 })
             except Exception:
@@ -499,113 +522,131 @@ async def toggle_student_attendance(payload: Dict[str, Any] = Body(...)):
         return {
             "success": True,
             "message": f"Marked {hall_ticket} as {target_status.upper()}.",
-            "record": record
+            "record": rec_dict
         }
 
+
 @router.post("/bulk")
-async def bulk_mark_attendance(payload: Dict[str, Any] = Body(...)):
+async def bulk_mark_attendance(
+    payload: Dict[str, Any] = Body(...),
+    current_user: Dict[str, Any] = Depends(require_role(["faculty", "admin"])),
+    db: Session = Depends(get_db)
+):
     """
-    Bulk mark attendance for an array of students.
+    Bulk mark attendance for an array of students in PostgreSQL.
+    Requires Faculty or Admin authorization.
     """
     students = payload.get("students", [])
     target_status = payload.get("status", "present").lower()
-    session_uuid = get_or_create_valid_session_id(payload.get("sessionId"), "CSM", "A")
+    session_uuid_str = get_or_create_valid_session_id(payload.get("sessionId"), "CSM", "A", db=db)
+    session_uuid = uuid.UUID(session_uuid_str)
+    now_dt = datetime.now(timezone.utc)
 
     for s in students:
         ht = (s.get("hallTicketNo") or s.get("uid") or "").strip().upper()
         if not ht:
             continue
         if target_status == "absent":
-            if supabase_client:
-                try:
-                    supabase_client.table("attendance_records").delete().eq("hall_ticket_no", ht).execute()
-                except Exception:
-                    pass
+            db.query(AttendanceRecord).filter(
+                AttendanceRecord.hall_ticket_no == ht
+            ).delete()
         else:
-            rec = {
-                "id": str(uuid.uuid4()),
-                "session_id": session_uuid,
-                "student_id": s.get("uid") or ht,
-                "student_name": s.get("name", f"Student ({ht})"),
-                "hall_ticket_no": ht,
-                "branch": s.get("branch", "CSM"),
-                "section": s.get("section", "A"),
-                "year": int(s.get("year") or 3),
-                "status": target_status,
-                "verification_method": "manual",
-                "marked_at": datetime.utcnow().isoformat() + "Z"
-            }
-            if supabase_client:
-                try:
-                    supabase_client.table("attendance_records").delete().eq("hall_ticket_no", ht).execute()
-                    supabase_client.table("attendance_records").insert([rec]).execute()
-                except Exception:
-                    pass
+            db.query(AttendanceRecord).filter(
+                AttendanceRecord.hall_ticket_no == ht
+            ).delete()
+
+            rec = AttendanceRecord(
+                id=uuid.uuid4(),
+                session_id=session_uuid,
+                student_id=s.get("uid") or ht,
+                student_name=s.get("name", f"Student ({ht})"),
+                hall_ticket_no=ht,
+                branch=s.get("branch", "CSM"),
+                section=s.get("section", "A"),
+                year=int(s.get("year") or 3),
+                status=target_status,
+                verification_method="manual",
+                marked_at=now_dt
+            )
+            db.add(rec)
+
+    db.commit()
 
     return {
         "success": True,
         "message": f"Bulk marked {len(students)} students as {target_status.upper()}."
     }
 
+
 @router.post("/mark")
 def mark_attendance_direct(
     payload: Dict[str, Any] = Body(...),
-    current_user: Dict[str, Any] = Depends(require_role(["faculty", "admin"]))
+    current_user: Dict[str, Any] = Depends(require_role(["faculty", "admin"])),
+    db: Session = Depends(get_db)
 ):
     """
     Direct attendance marking endpoint for manual overrides / faculty attendance.
     Requires Faculty or Admin authorization.
     """
     student_id = payload.get("studentId")
-    session_id = payload.get("sessionId")
+    session_id_str = payload.get("sessionId")
 
-    if not student_id or not session_id:
+    if not student_id or not session_id_str:
         raise HTTPException(status_code=400, detail="Missing required parameters: studentId and sessionId")
 
     hall_ticket = payload.get("hallTicketNo", student_id).strip().upper()
     performer_id = str(current_user.get("id") or current_user.get("sub", "faculty"))
+    session_uuid = uuid.UUID(session_id_str) if isinstance(session_id_str, str) else session_id_str
+    now_dt = datetime.now(timezone.utc)
 
-    new_record = {
-        "id": str(uuid.uuid4()),
-        "session_id": session_id,
-        "student_id": student_id,
-        "student_name": payload.get("studentName", "Student"),
-        "hall_ticket_no": hall_ticket,
-        "branch": payload.get("branch", "CSE"),
-        "section": payload.get("section", "A"),
-        "year": payload.get("year", 3),
-        "marked_at": datetime.utcnow().isoformat() + "Z",
-        "status": payload.get("status", "present"),
-        "verification_method": payload.get("verificationMethod", "manual"),
-        "face_match_confidence": payload.get("faceMatchConfidence", 0.95),
-        "face_distance": payload.get("faceDistance", 0.28),
-        "blink_verified": bool(payload.get("blinkVerified", False)),
-        "biometric_verified": bool(payload.get("biometricVerified", False)),
-        "gps_distance_meters": 15,
-        "student_lat": payload.get("studentLat", 17.2472),
-        "student_lng": payload.get("studentLng", 80.1514),
-        "manual_reason": payload.get("manualReason", "Faculty override"),
-        "marked_by": performer_id
-    }
+    # Remove existing
+    db.query(AttendanceRecord).filter(
+        AttendanceRecord.hall_ticket_no == hall_ticket
+    ).delete()
 
-    if supabase_client:
-        try:
-            supabase_client.table("attendance_records").insert([new_record]).execute()
-            supabase_client.table("audit_logs").insert([{
-                "action": "MANUAL_ATTENDANCE_MARKED",
-                "performed_by": performer_id,
-                "performer_role": current_user.get("role", "faculty"),
-                "details": new_record
-            }]).execute()
-        except Exception as e:
-            logger.error(f"Failed to persist manual attendance record: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Database failure: Could not record attendance.")
+    new_record = AttendanceRecord(
+        id=uuid.uuid4(),
+        session_id=session_uuid,
+        student_id=student_id,
+        student_name=payload.get("studentName", "Student"),
+        hall_ticket_no=hall_ticket,
+        branch=payload.get("branch", "CSE"),
+        section=payload.get("section", "A"),
+        year=int(payload.get("year", 3)),
+        marked_at=now_dt,
+        status=payload.get("status", "present"),
+        verification_method=payload.get("verificationMethod", "manual"),
+        face_match_confidence=float(payload.get("faceMatchConfidence", 0.95)),
+        face_distance=float(payload.get("faceDistance", 0.28)),
+        blink_verified=bool(payload.get("blinkVerified", False)),
+        biometric_verified=bool(payload.get("biometricVerified", False)),
+        gps_distance_meters=15,
+        student_lat=float(payload.get("studentLat", 17.2472)),
+        student_lng=float(payload.get("studentLng", 80.1514)),
+        manual_reason=payload.get("manualReason", "Faculty override"),
+        marked_by=performer_id
+    )
+    db.add(new_record)
+
+    # Log to audit_logs
+    audit_entry = AuditLog(
+        id=uuid.uuid4(),
+        action="MANUAL_ATTENDANCE_MARKED",
+        performed_by=performer_id,
+        performer_role=current_user.get("role", "faculty"),
+        details=new_record.to_dict(),
+        timestamp=now_dt
+    )
+    db.add(audit_entry)
+    db.commit()
+    db.refresh(new_record)
 
     return {
         "success": True,
-        "message": f"Attendance recorded via {new_record['verification_method']}",
-        "record": new_record
+        "message": f"Attendance recorded via {new_record.verification_method}",
+        "record": new_record.to_dict()
     }
+
 
 @router.post("/verify-face")
 def verify_face_direct(

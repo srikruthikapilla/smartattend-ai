@@ -4,7 +4,7 @@ from typing import Optional, List, Union, Dict, Any
 from fastapi import Header, HTTPException, Depends, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.config import JWT_SECRET, SUPABASE_JWT_SECRET, EDGE_API_KEY
-from app.database import supabase_client
+from app.database import supabase_auth
 
 security_scheme = HTTPBearer(auto_error=False)
 
@@ -30,10 +30,10 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"}
         )
 
-    # 1. Try Supabase Auth get_user if client is connected
-    if supabase_client:
+    # 1. Try Supabase Auth get_user if auth client is connected
+    if supabase_auth:
         try:
-            res = supabase_client.auth.get_user(token)
+            res = supabase_auth.auth.get_user(token)
             if res and res.user:
                 u = res.user
                 role = "student"

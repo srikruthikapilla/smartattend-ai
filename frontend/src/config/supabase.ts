@@ -3,13 +3,17 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 const rawUrl = import.meta.env.VITE_SUPABASE_URL;
 const rawKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-const supabaseUrl = rawUrl && rawUrl.startsWith('http') 
-  ? rawUrl 
-  : 'https://[REDACTED_PROJECT_REF].supabase.co';
+const supabaseUrl = rawUrl && rawUrl.startsWith('http') ? rawUrl : '';
+const supabaseAnonKey = rawKey && rawKey.length > 10 ? rawKey : '';
 
-const supabaseAnonKey = rawKey && rawKey.length > 10 
-  ? rawKey 
-  : '[REDACTED_SUPABASE_TOKEN]';
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.warn('[Supabase Config] Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in environment.');
+}
 
-export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey);
+// Use environment values or safe placeholder to avoid module loading crashes
+export const supabase: SupabaseClient = createClient(
+  supabaseUrl || 'https://placeholder.supabase.co',
+  supabaseAnonKey || 'placeholder-anon-key'
+);
+
 export default supabase;

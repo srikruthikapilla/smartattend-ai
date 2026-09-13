@@ -21,7 +21,10 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
 
-JWT_SECRET = os.getenv("JWT_SECRET") or os.getenv("SUPABASE_JWT_SECRET") or "smartattend-secure-qr-jwt-key-2026"
+NODE_ENV = os.getenv("NODE_ENV", "development").lower()
 
+JWT_SECRET = os.getenv("JWT_SECRET") or os.getenv("SUPABASE_JWT_SECRET") or ""
+if NODE_ENV == "production" and not JWT_SECRET:
+    raise RuntimeError("CRITICAL SECURITY ERROR: JWT_SECRET must be set in production.")
 
-EDGE_API_KEY = os.getenv("EDGE_API_KEY", "smartattend-edge-default-key")
+EDGE_API_KEY = os.getenv("EDGE_API_KEY", "")

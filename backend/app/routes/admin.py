@@ -1,10 +1,21 @@
+"""
+Smart Attend — Admin Portal Routes
+====================================
+All queries run against PostgreSQL via SQLAlchemy.
+"""
+
 import logging
 from fastapi import APIRouter, HTTPException, Depends
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any
+
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+
 from app.models.schemas import GeofenceUpdatePayload
+from app.models.db_models import User, AttendanceSession, AttendanceRecord, GeofenceConfig
 from app.utils.geofence import current_geofence, update_geofence
-from app.database import supabase_client
+from app.database import get_db
 from app.dependencies.auth import require_role
 
 logger = logging.getLogger(__name__)
@@ -16,37 +27,21 @@ router = APIRouter(
 )
 
 @router.get("/stats")
-def get_admin_stats():
+def get_admin_stats(db: Session = Depends(get_db)):
     """
-    Retrieve platform status & stats for Admin dashboard.
+    Retrieve platform status & stats for Admin dashboard from PostgreSQL.
     Requires Admin authorization.
     """
-    total_users = 0
-    total_students = 0
-    total_faculty = 0
-    pending_approvals = 0
-    total_sessions = 0
-    total_records = 0
-
-    if supabase_client:
-        try:
-            users_res = supabase_client.table("users").select("*").execute()
-            if users_res.data:
-                total_users = len(users_res.data)
-                total_students = len([u for u in users_res.data if u.get("role") == "student"])
-                total_faculty = len([u for u in users_res.data if u.get("role") == "faculty"])
-                pending_approvals = len([u for u in users_res.data if u.get("status") == "pending"])
-            
-            sessions_res = supabase_client.table("attendance_sessions").select("id").execute()
-            if sessions_res.data:
-                total_sessions = len(sessions_res.data)
-
-            records_res = supabase_client.table("attendance_records").select("id").execute()
-            if records_res.data:
-                total_records = len(records_res.data)
-        except Exception as e:
-            logger.error(f"Supabase stats query error: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Error loading database statistics.")
+    try:
+        total_users = db.query(func.count(User.id)).scalar() or 0
+        total_students = db.query(func.count(User.id)).filter(User.role == "student").scalar() or 0
+        total_faculty = db.query(func.count(User.id)).filter(User.role == "faculty").scalar() or 0
+        pending_approvals = db.query(func.count(User.id)).filter(User.status == "pending").scalar() or 0
+        total_sessions = db.query(func.count(AttendanceSession.id)).scalar() or 0
+        total_records = db.query(func.count(AttendanceRecord.id)).scalar() or 0
+    except Exception as e:
+        logger.error(f"PostgreSQL stats query error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Error loading database statistics.")
 
     return {
         "totalUsers": total_users,
@@ -55,22 +50,20 @@ def get_admin_stats():
         "pendingApprovals": pending_approvals,
         "totalSessions": total_sessions,
         "totalRecords": total_records,
-        "serverTime": datetime.utcnow().isoformat() + "Z"
+        "serverTime": datetime.now(timezone.utc).isoformat() + "Z"
     }
 
 @router.get("/geofence")
-def get_geofence():
+def get_geofence(db: Session = Depends(get_db)):
     """
-    Read current campus center point + allowed radius.
+    Read current campus center point + allowed radius from PostgreSQL.
     """
-    if supabase_client:
-        try:
-            res = supabase_client.table("geofence_config").select("*").eq("id", 1).execute()
-            if res.data and len(res.data) > 0:
-                cfg = res.data[0]
-                update_geofence(cfg["center_lat"], cfg["center_lng"], cfg["radius_m"])
-        except Exception as e:
-            logger.warning(f"Failed to query geofence config from DB: {e}")
+    try:
+        cfg = db.query(GeofenceConfig).filter_by(id=1).first()
+        if cfg:
+            update_geofence(cfg.center_lat, cfg.center_lng, cfg.radius_m)
+    except Exception as e:
+        logger.warning(f"Failed to query geofence config from DB: {e}")
 
     return {
         "success": True,
@@ -78,25 +71,32 @@ def get_geofence():
     }
 
 @router.put("/geofence")
-def update_geofence_config(payload: GeofenceUpdatePayload):
+def update_geofence_config(payload: GeofenceUpdatePayload, db: Session = Depends(get_db)):
     """
-    Update campus center point + allowed radius.
+    Update campus center point + allowed radius in PostgreSQL.
     Requires Admin authorization.
     """
     update_geofence(payload.center_lat, payload.center_lng, payload.radius_m)
 
-    if supabase_client:
-        try:
-            supabase_client.table("geofence_config").upsert([{
-                "id": 1,
-                "center_lat": payload.center_lat,
-                "center_lng": payload.center_lng,
-                "radius_m": payload.radius_m,
-                "updated_at": datetime.utcnow().isoformat() + "Z"
-            }]).execute()
-        except Exception as e:
-            logger.error(f"Failed to persist geofence update to Supabase: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Database failure: unable to update geofence configuration.")
+    try:
+        cfg = db.query(GeofenceConfig).filter_by(id=1).first()
+        if cfg:
+            cfg.center_lat = payload.center_lat
+            cfg.center_lng = payload.center_lng
+            cfg.radius_m = payload.radius_m
+            cfg.updated_at = datetime.now(timezone.utc)
+        else:
+            cfg = GeofenceConfig(
+                id=1,
+                center_lat=payload.center_lat,
+                center_lng=payload.center_lng,
+                radius_m=payload.radius_m,
+            )
+            db.add(cfg)
+        db.commit()
+    except Exception as e:
+        logger.error(f"Failed to persist geofence update: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database failure: unable to update geofence configuration.")
 
     return {
         "success": True,

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Smart Attend - Terminal Database Seeder
-=======================================
-Seeds:
+Smart Attend — Terminal PostgreSQL Database Seeder
+===================================================
+Seeds directly into PostgreSQL:
   1. System Administrator: agandasiri@gmail.com
   2. Faculty Member: muneeb143@gmail.com
-  3. All 50 Enrolled Students from 'STUD DTLS (1).xlsx' (No email required; roll-number based)
+  3. All 50 Enrolled Students from 'STUD DTLS (1).xlsx'
+  4. Campus Baseline Geofence Configuration
 
 Usage:
   python backend/app/seed.py
@@ -16,7 +17,13 @@ Usage:
 import os
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+
+# Ensure project backend directory is in python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+backend_root = os.path.abspath(os.path.join(current_dir, ".."))
+if backend_root not in sys.path:
+    sys.path.insert(0, backend_root)
 
 try:
     import openpyxl
@@ -24,39 +31,29 @@ except ImportError:
     os.system(f"{sys.executable} -m pip install openpyxl")
     import openpyxl
 
-try:
-    from supabase import create_client
-except ImportError:
-    os.system(f"{sys.executable} -m pip install supabase")
-try:
-    from dotenv import load_dotenv
-    _backend_env = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env"))
-    if os.path.exists(_backend_env):
-        load_dotenv(_backend_env)
-    else:
-        load_dotenv()
-except ImportError:
-    pass
+from app.database import init_db, get_db_context, supabase_auth
+from app.models.db_models import User, GeofenceConfig
+from app.config import DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 def find_excel_file():
     candidates = [
         "STUD DTLS (1).xlsx",
         "../STUD DTLS (1).xlsx",
         "../../STUD DTLS (1).xlsx",
+        os.path.join(backend_root, "..", "STUD DTLS (1).xlsx"),
         "d:/Projects/smartattend-ai/STUD DTLS (1).xlsx"
     ]
     for c in candidates:
         if os.path.exists(c):
-            return c
+            return os.path.abspath(c)
     return None
+
 
 def parse_students():
     excel_path = find_excel_file()
     if not excel_path:
-        print("⚠️ Warning: 'STUD DTLS (1).xlsx' not found. Using embedded 50-student roster.")
+        print("⚠️ Warning: 'STUD DTLS (1).xlsx' not found. Skipping student import.")
         return []
 
     wb = openpyxl.load_workbook(excel_path)
@@ -65,9 +62,7 @@ def parse_students():
     if not rows:
         return []
 
-    header = [str(col).strip().lower() if col else '' for col in rows[0]]
     students = []
-
     for r in rows[1:]:
         if not any(r):
             continue
@@ -95,113 +90,160 @@ def parse_students():
 
     return students
 
+
 def seed_database():
     print("=" * 70)
-    print(">> Smart Attend - Live Terminal Database Seeder")
+    print(">> Smart Attend — PostgreSQL Database Seeder")
+    print(f"[*] Target PostgreSQL URL: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL}")
     print("=" * 70)
 
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        print("❌ Error: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables are required.")
-        print("Please configure them in your .env file before running the seeder.")
-        sys.exit(1)
+    # 1. Initialize schema in PostgreSQL
+    init_db()
 
-    sb = create_client(SUPABASE_URL, SUPABASE_KEY)
-    print(f"[*] Connected to Supabase at: {SUPABASE_URL}")
+    with get_db_context() as db:
+        now_dt = datetime.now(timezone.utc)
 
-    # 1. Seed Admin
-    admin_data = {
-        "email": "agandasiri@gmail.com",
-        "name": "Admin",
-        "role": "admin",
-        "designation": "System Administrator",
-        "college": "Swarna Bharathi Institute of Science and Technology (SBIT)",
-        "status": "approved"
-    }
-    try:
-        sb.from_("users").upsert(admin_data, on_conflict="email").execute()
-        print(f"[+] [Admin] Seeded: {admin_data['name']} ({admin_data['email']})")
-    except Exception as e:
-        print(f"[!] [Admin] Notice: {e}")
+        # 2. Seed Administrator
+        admin_email = "agandasiri@gmail.com"
+        admin_user = db.query(User).filter_by(email=admin_email).first()
+        if not admin_user:
+            admin_user = User(
+                id=uuid.uuid4(),
+                email=admin_email,
+                name="Admin",
+                role="admin",
+                designation="System Administrator",
+                college="Swarna Bharathi Institute of Science and Technology (SBIT)",
+                status="approved",
+                created_at=now_dt,
+                updated_at=now_dt
+            )
+            db.add(admin_user)
+            print(f"[+] [Admin] Created: {admin_user.name} ({admin_user.email})")
+        else:
+            admin_user.role = "admin"
+            admin_user.status = "approved"
+            admin_user.updated_at = now_dt
+            print(f"[+] [Admin] Verified: {admin_user.name} ({admin_user.email})")
 
-    # 2. Seed Faculty
-    faculty_data = {
-        "email": "muneeb143@gmail.com",
-        "name": "Muneeb Bhai",
-        "role": "faculty",
-        "designation": "Assistant Professor",
-        "department": "Computer Science & Engineering",
-        "assigned_branch": "CSM",
-        "assigned_sections": ["A", "B"],
-        "college": "Swarna Bharathi Institute of Science and Technology (SBIT)",
-        "status": "approved"
-    }
-    try:
-        sb.from_("users").upsert(faculty_data, on_conflict="email").execute()
-        print(f"[+] [Faculty] Seeded: {faculty_data['name']} ({faculty_data['email']}) - CSM Sec A/B")
-    except Exception as e:
-        print(f"[!] [Faculty] Notice: {e}")
+        # 3. Seed Faculty Member
+        faculty_email = "muneeb143@gmail.com"
+        faculty_user = db.query(User).filter_by(email=faculty_email).first()
+        if not faculty_user:
+            faculty_user = User(
+                id=uuid.uuid4(),
+                email=faculty_email,
+                name="Muneeb Bhai",
+                role="faculty",
+                designation="Assistant Professor",
+                department="Computer Science & Engineering",
+                assigned_branch="CSM",
+                assigned_sections=["A", "B"],
+                college="Swarna Bharathi Institute of Science and Technology (SBIT)",
+                status="approved",
+                created_at=now_dt,
+                updated_at=now_dt
+            )
+            db.add(faculty_user)
+            print(f"[+] [Faculty] Created: {faculty_user.name} ({faculty_user.email})")
+        else:
+            faculty_user.role = "faculty"
+            faculty_user.assigned_branch = "CSM"
+            faculty_user.assigned_sections = ["A", "B"]
+            faculty_user.status = "approved"
+            faculty_user.updated_at = now_dt
+            print(f"[+] [Faculty] Verified: {faculty_user.name} ({faculty_user.email})")
 
-    # 3. Seed Students
-    students = parse_students()
-    print(f"\n[*] Found {len(students)} students in Excel file.")
+        # 4. Seed Students from Excel
+        students = parse_students()
+        print(f"\n[*] Found {len(students)} students to sync.")
 
-    # Fetch existing users to match by hall_ticket_no or email
-    existing_users_res = sb.from_("users").select("id, email, hall_ticket_no, role").execute()
-    existing_by_roll = {}
-    existing_by_email = {}
-    for u in (existing_users_res.data or []):
-        if u.get("hall_ticket_no"):
-            existing_by_roll[str(u["hall_ticket_no"]).strip().upper()] = u["id"]
-        if u.get("email"):
-            existing_by_email[str(u["email"]).strip().lower()] = u["id"]
+        success_count = 0
+        for st in students:
+            roll = st["hall_ticket_no"].upper()
+            email_val = f"{roll.lower()}@sbit.ac.in"
 
-    success_count = 0
-    for st in students:
-        roll = st["hall_ticket_no"].upper()
-        email_val = f"{roll.lower()}@sbit.ac.in"
-        existing_id = existing_by_roll.get(roll) or existing_by_email.get(email_val)
+            existing = (
+                db.query(User)
+                .filter((User.hall_ticket_no == roll) | (User.email == email_val))
+                .first()
+            )
 
-        student_payload = {
-            "name": st["name"],
-            "hall_ticket_no": roll,
-            "email": email_val, # Compatible with both DB constraint requirements
-            "branch": st["branch"],
-            "year": st["year"],
-            "semester": st["semester"],
-            "section": st["section"],
-            "role": "student",
-            "status": "approved",
-            "college": st["college"]
-        }
-
-        try:
-            if existing_id:
-                sb.from_("users").update(student_payload).eq("id", existing_id).execute()
+            if existing:
+                existing.name = st["name"]
+                existing.hall_ticket_no = roll
+                existing.branch = st["branch"]
+                existing.year = st["year"]
+                existing.semester = st["semester"]
+                existing.section = st["section"]
+                existing.role = "student"
+                existing.status = "approved"
+                existing.college = st["college"]
+                existing.updated_at = now_dt
             else:
-                student_payload["id"] = str(uuid.uuid4())
-                sb.from_("users").insert(student_payload).execute()
+                new_student = User(
+                    id=uuid.uuid4(),
+                    email=email_val,
+                    name=st["name"],
+                    hall_ticket_no=roll,
+                    branch=st["branch"],
+                    year=st["year"],
+                    semester=st["semester"],
+                    section=st["section"],
+                    role="student",
+                    status="approved",
+                    college=st["college"],
+                    created_at=now_dt,
+                    updated_at=now_dt
+                )
+                db.add(new_student)
             success_count += 1
-        except Exception as e:
-            print(f"[!] Error seeding student {roll}: {e}")
 
-    print(f"[+] [Students] Successfully seeded {success_count} / {len(students)} students.")
+        # 5. Seed Geofence Configuration
+        geo = db.query(GeofenceConfig).filter_by(id=1).first()
+        if not geo:
+            geo = GeofenceConfig(
+                id=1,
+                center_lat=17.2472,
+                center_lng=80.1514,
+                radius_m=150,
+                address="SBIT Campus, Pakabanda Street, Khammam, Telangana 507002",
+                enabled=True,
+                updated_at=now_dt
+            )
+            db.add(geo)
+            print("[+] [Geofence] Default campus baseline set: Radius 150m.")
 
-    # 4. Initialize Default Geofence Config
-    try:
-        sb.from_("geofence_config").upsert({
-            "id": 1,
-            "center_lat": 17.2472,
-            "center_lng": 80.1514,
-            "radius_m": 150,
-            "campus_name": "SBIT Main Campus & Innovation Centre"
-        }, on_conflict="id").execute()
-        print(f"[+] [Geofence] Default campus baseline set: Radius 150m (Dynamic per-session).")
-    except Exception as e:
-        pass
+        db.commit()
+        print(f"[+] [Students] Successfully seeded/updated {success_count} / {len(students)} students in PostgreSQL.")
+
+    # 6. Optional: Sync Admin & Faculty to Supabase Auth if credentials configured
+    if supabase_auth:
+        print("\n[*] Syncing admin/faculty credentials with Supabase Auth...")
+        for account in [
+            {"email": "agandasiri@gmail.com", "role": "admin"},
+            {"email": "muneeb143@gmail.com", "role": "faculty"}
+        ]:
+            try:
+                auth_users = supabase_auth.auth.admin.list_users()
+                target = next((u for u in auth_users if u.email.lower() == account["email"]), None)
+                if not target:
+                    supabase_auth.auth.admin.create_user({
+                        "email": account["email"],
+                        "password": "Password123!",
+                        "email_confirm": True,
+                        "user_metadata": {"role": account["role"]}
+                    })
+                    print(f"    [+] Created Supabase Auth user: {account['email']}")
+                else:
+                    print(f"    [+] Supabase Auth user already exists: {account['email']}")
+            except Exception as e:
+                print(f"    [!] Supabase Auth sync notice for {account['email']}: {e}")
 
     print("\n" + "=" * 70)
-    print(f">> Database Seeding Complete! Total 52 accounts ready.")
+    print(">> PostgreSQL Database Seeding Complete! All accounts ready.")
     print("=" * 70)
+
 
 if __name__ == "__main__":
     seed_database()

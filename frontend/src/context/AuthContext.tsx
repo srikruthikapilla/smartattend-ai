@@ -37,7 +37,7 @@ interface AuthContextType {
 
   requestPasswordReset(
     email: string
-  ): Promise<{ success: boolean; message: string; otpCode?: string }>;
+  ): Promise<{ success: boolean; message: string }>;
 
   resetPasswordWithCode(
     email: string,
@@ -208,111 +208,24 @@ export const AuthProvider: React.FC<{
     }
   }, [currentUser]);
 
-  // Real-time synchronization with Supabase users table (with backend API fallback)
+  // Synchronization with backend PostgreSQL users table
   useEffect(() => {
     const fetchUsers = async () => {
-      let loaded = false;
+      const token = localStorage.getItem('sbit_auth_token');
+      if (!token) return;
 
-      // 1. Try Supabase direct query
-      if (supabase) {
+      const endpoints = ['/api/auth/users', 'http://localhost:5000/api/auth/users'];
+      for (const ep of endpoints) {
         try {
-          const { data: dbUsers, error } = await supabase.from('users').select('*');
-          if (!error && dbUsers && dbUsers.length > 0) {
-            const mapped: UserProfile[] = dbUsers.map(u => ({
-              uid: u.id,
-              email: u.email,
-              name: u.name,
-              phone: u.phone || undefined,
-              role: (u.role || 'student') as any,
-              college: u.college || SBIT_COLLEGE_NAME,
-              department: u.department || undefined,
-              designation: u.designation || undefined,
-              assignedBranch: u.assigned_branch || undefined,
-              assignedSections: u.assigned_sections || [],
-              hallTicketNo: u.hall_ticket_no || undefined,
-              branch: u.branch || undefined,
-              section: u.section || undefined,
-              year: u.year ? String(u.year) : undefined,
-              semester: u.semester ? String(u.semester) : undefined,
-              faceDescriptor: u.face_descriptor || undefined,
-              faceEnrollmentStatus: u.face_enrollment_status || 'pending',
-              status: u.status || 'approved',
-              createdAt: u.created_at || new Date().toISOString()
-            }));
-
-            setUsers(prev => {
-              const map = new Map<string, UserProfile>();
-              prev.forEach(u => map.set(u.email.toLowerCase(), u));
-              mapped.forEach(u => map.set(u.email.toLowerCase(), u));
-              return Array.from(map.values());
-            });
-            loaded = true;
-          }
-        } catch (err) {
-          console.warn("Supabase direct users fetch notice:", err);
-        }
-      }
-
-      // 2. If direct Supabase failed or returned empty, query backend proxy
-      if (!loaded) {
-        const endpoints = ['/api/auth/users', 'http://localhost:5000/api/auth/users'];
-        for (const ep of endpoints) {
-          try {
-            const res = await fetch(ep);
-            if (res.ok) {
-              const data = await res.json();
-              if (data.success && data.users && data.users.length > 0) {
-                const mapped: UserProfile[] = data.users.map((u: any) => ({
-                  uid: u.id,
-                  email: u.email,
-                  name: u.name,
-                  phone: u.phone || undefined,
-                  role: (u.role || 'student') as any,
-                  college: u.college || SBIT_COLLEGE_NAME,
-                  department: u.department || undefined,
-                  designation: u.designation || undefined,
-                  assignedBranch: u.assigned_branch || undefined,
-                  assignedSections: u.assigned_sections || [],
-                  hallTicketNo: u.hall_ticket_no || undefined,
-                  branch: u.branch || undefined,
-                  section: u.section || undefined,
-                  year: u.year ? String(u.year) : undefined,
-                  semester: u.semester ? String(u.semester) : undefined,
-                  faceDescriptor: u.face_descriptor || undefined,
-                  faceEnrollmentStatus: u.face_enrollment_status || 'pending',
-                  status: u.status || 'approved',
-                  createdAt: u.created_at || new Date().toISOString()
-                }));
-
-                setUsers(prev => {
-                  const map = new Map<string, UserProfile>();
-                  prev.forEach(u => map.set(u.email.toLowerCase(), u));
-                  mapped.forEach(u => map.set(u.email.toLowerCase(), u));
-                  return Array.from(map.values());
-                });
-                break;
-              }
+          const res = await fetch(ep, {
+            headers: {
+              'Authorization': `Bearer ${token}`
             }
-          } catch (e) {
-            // Try next endpoint
-          }
-        }
-      }
-    };
-
-    fetchUsers();
-
-    // Subscribe to realtime database changes on users table if Supabase is connected
-    if (supabase) {
-      const channel = supabase
-        .channel('realtime-users-stream')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'users' },
-          (payload: any) => {
-            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-              const u = payload.new;
-              const updatedUser: UserProfile = {
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.users && data.users.length > 0) {
+              const mapped: UserProfile[] = data.users.map((u: any) => ({
                 uid: u.id,
                 email: u.email,
                 name: u.name,
@@ -332,30 +245,25 @@ export const AuthProvider: React.FC<{
                 faceEnrollmentStatus: u.face_enrollment_status || 'pending',
                 status: u.status || 'approved',
                 createdAt: u.created_at || new Date().toISOString()
-              };
+              }));
 
               setUsers(prev => {
-                const filtered = prev.filter(user => user.email.toLowerCase() !== updatedUser.email.toLowerCase() && user.uid !== updatedUser.uid);
-                return [updatedUser, ...filtered];
+                const map = new Map<string, UserProfile>();
+                prev.forEach(u => map.set(u.email.toLowerCase(), u));
+                mapped.forEach(u => map.set(u.email.toLowerCase(), u));
+                return Array.from(map.values());
               });
-
-              setCurrentUser(curr => (curr && (curr.uid === updatedUser.uid || curr.email.toLowerCase() === updatedUser.email.toLowerCase()) ? updatedUser : curr));
-            } else if (payload.eventType === 'DELETE') {
-              const oldId = payload.old?.id;
-              if (oldId) {
-                setUsers(prev => prev.filter(user => user.uid !== oldId));
-                setCurrentUser(curr => (curr?.uid === oldId ? null : curr));
-              }
+              break;
             }
           }
-        )
-        .subscribe();
+        } catch (e) {
+          // Try next endpoint
+        }
+      }
+    };
 
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    }
-  }, []);
+    fetchUsers();
+  }, [currentUser]);
 
   const login = async (
     email: string,
@@ -365,75 +273,23 @@ export const AuthProvider: React.FC<{
     const cleanEmail = email.trim().toLowerCase();
     let lastError: string | null = null;
 
-    // 1. First Tier: Direct Supabase Auth & Database Query
-    if (supabase) {
+    // 1. First Tier: Supabase Auth Verification (Authentication Only)
+    if (supabase && password) {
       try {
-        let authUserId: string | null = null;
-        if (password) {
-          const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
-            email: cleanEmail,
-            password
-          });
-          if (authErr) {
-            const msg = (authErr.message || '').toLowerCase();
-            if (msg.includes('invalid login credentials') || msg.includes('invalid credentials')) {
-              lastError = 'Invalid email or password.';
-            } else if (!msg.includes('email not confirmed')) {
-              console.warn('Supabase sign-in notice:', authErr.message);
-            }
+        const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password
+        });
+        if (authErr) {
+          const msg = (authErr.message || '').toLowerCase();
+          if (msg.includes('invalid login credentials') || msg.includes('invalid credentials')) {
+            lastError = 'Invalid email or password.';
+          } else if (!msg.includes('email not confirmed')) {
+            console.warn('Supabase sign-in notice:', authErr.message);
           }
-          if (authData?.user) {
-            authUserId = authData.user.id;
-          }
-        }
-
-        const { data: dbUser, error: dbErr } = await supabase
-          .from('users')
-          .select('*')
-          .eq('email', cleanEmail)
-          .single();
-
-        if (dbUser && !dbErr) {
-          if (role && dbUser.role && dbUser.role !== role) {
-            throw new Error(`Account exists but is registered as '${dbUser.role.toUpperCase()}', not '${role.toUpperCase()}'.`);
-          }
-
-          if (dbUser.role === 'student' && dbUser.status !== 'approved') {
-            throw new Error(`Your account status is '${dbUser.status || 'pending'}'. An administrator must approve your registration first.`);
-          }
-
-          const detectedRole = dbUser.role || role || 'faculty';
-
-          const mappedUser: UserProfile = {
-            uid: dbUser.id || authUserId || `user_${Date.now()}`,
-            email: dbUser.email,
-            name: dbUser.name || dbUser.full_name || cleanEmail.split('@')[0],
-            phone: dbUser.phone || '',
-            role: detectedRole as any,
-            college: dbUser.college || SBIT_COLLEGE_NAME,
-            designation: dbUser.designation || (detectedRole === 'admin' ? 'Administrator' : 'Faculty Member'),
-            department: dbUser.department,
-            assignedBranch: dbUser.assigned_branch,
-            assignedSections: dbUser.assigned_sections,
-            status: dbUser.status || 'approved',
-            createdAt: dbUser.created_at || new Date().toISOString()
-          };
-
-          setUsers(prev => {
-            const exists = prev.some(u => u.uid === mappedUser.uid || u.email === mappedUser.email);
-            return exists ? prev.map(u => u.email === mappedUser.email ? mappedUser : u) : [mappedUser, ...prev];
-          });
-
-          setCurrentUser(mappedUser);
-          localStorage.setItem("sbit_current_user", JSON.stringify(mappedUser));
-          return true;
         }
       } catch (supabaseError: any) {
-        const errorMsg = (supabaseError?.message || '').toLowerCase();
-        if (errorMsg.includes('registered as') || errorMsg.includes('approved')) {
-          throw supabaseError;
-        }
-        console.warn("Direct Supabase login fallback triggered:", supabaseError?.message);
+        console.warn("Supabase auth login notice:", supabaseError?.message);
       }
     }
 
@@ -481,25 +337,11 @@ export const AuthProvider: React.FC<{
       }
     }
 
-    // 3. Third Tier: Local Stored & Cached Users
-    const localMatch = users.find(u => u.email.toLowerCase() === cleanEmail);
-    if (localMatch) {
-      if (role && localMatch.role !== role) {
-        throw new Error(`Account exists but is registered as '${localMatch.role.toUpperCase()}', not '${role.toUpperCase()}'.`);
-      }
-      if (localMatch.role === 'student' && localMatch.status !== 'approved') {
-        throw new Error(`Your account status is '${localMatch.status || 'pending'}'. An administrator must approve your registration first.`);
-      }
-      setCurrentUser(localMatch);
-      localStorage.setItem("sbit_current_user", JSON.stringify(localMatch));
-      return true;
-    }
-
     if (lastError) {
       throw new Error(lastError);
     }
 
-    throw new Error("Unable to authenticate. Please check your email, password, and server connection.");
+    throw new Error("Unable to authenticate. Please verify your credentials.");
   };
 
   const logout = async () => {
@@ -510,12 +352,14 @@ export const AuthProvider: React.FC<{
         // Safe logout
       }
     }
+    localStorage.removeItem('sbit_auth_token');
+    localStorage.removeItem('sbit_current_user');
     setCurrentUser(null);
   };
 
   const requestPasswordReset = async (
     email: string
-  ): Promise<{ success: boolean; message: string; otpCode?: string }> => {
+  ): Promise<{ success: boolean; message: string }> => {
     const cleanEmail = email.trim().toLowerCase();
     const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
 
@@ -530,8 +374,7 @@ export const AuthProvider: React.FC<{
         const data = await response.json();
         return {
           success: true,
-          message: data.message || "Verification code generated.",
-          otpCode: data.otp_code
+          message: data.message || "Verification code sent to your email."
         };
       }
     } catch (err) {
@@ -622,10 +465,11 @@ export const AuthProvider: React.FC<{
       createdAt: new Date().toISOString(),
     };
 
-    if (supabase) {
-      try {
-        await supabase.from('users').upsert({
-          id: uid,
+    try {
+      await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           email: cleanEmail,
           name: data.name.trim(),
           phone: data.phone || null,
@@ -634,10 +478,10 @@ export const AuthProvider: React.FC<{
           designation: data.designation || 'Administrator',
           department: data.department || null,
           status: 'approved'
-        }, { onConflict: 'email' });
-      } catch (err) {
-        console.warn("Supabase register admin notice:", err);
-      }
+        })
+      });
+    } catch (err) {
+      console.warn("Backend register admin notice:", err);
     }
 
     setUsers(prev => [newAdmin, ...prev.filter(u => u.email.toLowerCase() !== cleanEmail)]);
@@ -678,10 +522,11 @@ export const AuthProvider: React.FC<{
       createdAt: new Date().toISOString(),
     };
 
-    if (supabase) {
-      try {
-        await supabase.from('users').upsert({
-          id: uid,
+    try {
+      await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           email: cleanEmail,
           name: data.name.trim(),
           phone: data.phone || null,
@@ -692,10 +537,10 @@ export const AuthProvider: React.FC<{
           assigned_branch: data.assignedBranch || 'CSE',
           assigned_sections: data.assignedSections || ['A', 'B'],
           status: 'approved'
-        }, { onConflict: 'email' });
-      } catch (err) {
-        console.warn("Supabase register faculty notice:", err);
-      }
+        })
+      });
+    } catch (err) {
+      console.warn("Backend register faculty notice:", err);
     }
 
     setUsers(prev => [newFaculty, ...prev.filter(u => u.email.toLowerCase() !== cleanEmail)]);
@@ -727,10 +572,11 @@ export const AuthProvider: React.FC<{
       biometricEnrollmentStatus: "pending",
     };
 
-    if (supabase) {
-      try {
-        await supabase.from('users').upsert({
-          id: uid,
+    try {
+      await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           email: cleanEmail,
           name: data.name.trim(),
           hall_ticket_no: formattedHT,
@@ -741,12 +587,11 @@ export const AuthProvider: React.FC<{
           phone: data.phone || null,
           role: 'student',
           college: SBIT_COLLEGE_NAME,
-          status: 'approved',
-          face_enrollment_status: 'pending'
-        }, { onConflict: 'email' });
-      } catch (err) {
-        console.warn("Supabase register student notice:", err);
-      }
+          status: 'approved'
+        })
+      });
+    } catch (err) {
+      console.warn("Backend register student notice:", err);
     }
 
     setUsers(prev => [newStudent, ...prev.filter(u => u.email.toLowerCase() !== cleanEmail)]);
@@ -789,10 +634,11 @@ export const AuthProvider: React.FC<{
       biometricEnrollmentStatus: "pending",
     };
 
-    if (supabase) {
-      try {
-        await supabase.from('users').upsert({
-          id: uid,
+    try {
+      await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           email: cleanEmail,
           name: data.name.trim(),
           hall_ticket_no: formattedHT,
@@ -803,12 +649,11 @@ export const AuthProvider: React.FC<{
           phone: data.phone || null,
           role: 'student',
           college: SBIT_COLLEGE_NAME,
-          status: data.status || 'approved',
-          face_enrollment_status: 'pending'
-        }, { onConflict: 'email' });
-      } catch (err) {
-        console.warn("Supabase insertStudent notice:", err);
-      }
+          status: data.status || 'approved'
+        })
+      });
+    } catch (err) {
+      console.warn("Backend insert student notice:", err);
     }
 
     setUsers(prev => [newStudent, ...prev]);
@@ -878,27 +723,26 @@ export const AuthProvider: React.FC<{
     });
 
     if (newStudentsToAdd.length > 0) {
-      if (supabase) {
-        try {
-          const dbRows = newStudentsToAdd.map(s => ({
-            id: s.uid,
-            email: s.email,
-            name: s.name,
-            hall_ticket_no: s.hallTicketNo,
-            branch: s.branch,
-            section: s.section,
-            year: String(s.year),
-            semester: String(s.semester || 1),
-            phone: s.phone || null,
-            role: 'student',
-            college: SBIT_COLLEGE_NAME,
-            status: s.status || 'approved',
-            face_enrollment_status: 'pending'
-          }));
-          await supabase.from('users').upsert(dbRows, { onConflict: 'email' });
-        } catch (err) {
-          console.warn("Supabase bulk insert notice:", err);
-        }
+      try {
+        await fetch('/api/auth/users/bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            students: newStudentsToAdd.map(s => ({
+              email: s.email,
+              name: s.name,
+              hall_ticket_no: s.hallTicketNo,
+              branch: s.branch,
+              section: s.section,
+              year: s.year,
+              semester: s.semester,
+              phone: s.phone,
+              status: s.status
+            }))
+          })
+        });
+      } catch (err) {
+        console.warn("Backend bulk insert notice:", err);
       }
 
       setUsers(prev => [...newStudentsToAdd, ...prev]);
@@ -939,32 +783,14 @@ export const AuthProvider: React.FC<{
     uid: string,
     updates: Partial<UserProfile>
   ) => {
-    if (supabase) {
-      try {
-        const payload: Record<string, any> = {};
-        if (updates.name !== undefined) payload.name = updates.name;
-        if (updates.email !== undefined) payload.email = updates.email.toLowerCase();
-        if (updates.phone !== undefined) payload.phone = updates.phone;
-        if (updates.department !== undefined) payload.department = updates.department;
-        if (updates.designation !== undefined) payload.designation = updates.designation;
-        if (updates.assignedBranch !== undefined) payload.assigned_branch = updates.assignedBranch;
-        if (updates.assignedSections !== undefined) payload.assigned_sections = updates.assignedSections;
-        if (updates.branch !== undefined) payload.branch = updates.branch;
-        if (updates.section !== undefined) payload.section = updates.section;
-        if (updates.year !== undefined) payload.year = String(updates.year);
-        if (updates.semester !== undefined) payload.semester = String(updates.semester);
-        if (updates.status !== undefined) payload.status = updates.status;
-
-        if (Object.keys(payload).length > 0) {
-          payload.updated_at = new Date().toISOString();
-          await supabase
-            .from('users')
-            .update(payload)
-            .or(`id.eq.${uid},email.eq.${updates.email || ''}`);
-        }
-      } catch (err) {
-        console.warn("Supabase updateUser notice:", err);
-      }
+    try {
+      await fetch(`/api/auth/users/${uid}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+    } catch (err) {
+      console.warn("Backend updateUser notice:", err);
     }
 
     setUsers(prev =>
@@ -988,12 +814,12 @@ export const AuthProvider: React.FC<{
   };
 
   const deleteUser = async (uid: string) => {
-    if (supabase) {
-      try {
-        await supabase.from('users').delete().eq('id', uid);
-      } catch (err) {
-        console.warn("Supabase deleteUser notice:", err);
-      }
+    try {
+      await fetch(`/api/auth/users/${uid}`, {
+        method: 'DELETE'
+      });
+    } catch (err) {
+      console.warn("Backend deleteUser notice:", err);
     }
 
     setUsers(prev => prev.filter(user => user.uid !== uid));
@@ -1013,27 +839,7 @@ export const AuthProvider: React.FC<{
     const failures: string[] = [];
     let persisted = false;
 
-    // 1. Supabase sync
-    try {
-      if (supabase) {
-        const { error } = await supabase
-          .from('users')
-          .update({
-            face_descriptor: descriptor,
-            face_enrollment_status: 'enrolled',
-            face_enrolled_at: enrolledAt,
-            updated_at: enrolledAt
-          })
-          .eq('id', uid);
-        if (error) {
-          failures.push(`Supabase update failed: ${error.message}`);
-        } else {
-          persisted = true;
-        }
-      }
-    } catch (e) {
-      failures.push(`Supabase update failed: ${String(e)}`);
-    }
+
 
     // 2. FastAPI backend sync
     const token = localStorage.getItem('sbit_auth_token') || localStorage.getItem('token');
@@ -1113,22 +919,7 @@ export const AuthProvider: React.FC<{
     const student = users.find(u => u.uid === uid) || (currentUser?.uid === uid ? currentUser : null);
     const hallTicketNo = student?.hallTicketNo;
 
-    // 1. Supabase sync
-    if (supabase) {
-      try {
-        await supabase
-          .from('users')
-          .update({
-            face_descriptor: null,
-            face_enrollment_status: 'pending',
-            face_enrolled_at: null,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', uid);
-      } catch (e) {
-        console.warn("Supabase revoke face notice:", e);
-      }
-    }
+
 
     // 2. Call backend /api/students/{id}/revoke-face-data
     const token = localStorage.getItem('sbit_auth_token') || localStorage.getItem('token');
@@ -1184,22 +975,7 @@ export const AuthProvider: React.FC<{
     const student = users.find(u => u.uid === uid) || (currentUser?.uid === uid ? currentUser : null);
     const hallTicketNo = student?.hallTicketNo;
 
-    if (supabase) {
-      try {
-        await supabase
-          .from('users')
-          .update({
-            biometric_credential_id: credentialId,
-            biometric_public_key: publicKey || null,
-            biometric_enrollment_status: 'enrolled',
-            biometric_enrolled_at: enrolledAt,
-            updated_at: enrolledAt
-          })
-          .eq('id', uid);
-      } catch (e) {
-        console.warn("Biometric enrollment db sync notice:", e);
-      }
-    }
+
 
     if (hallTicketNo) {
       try {

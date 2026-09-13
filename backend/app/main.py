@@ -13,7 +13,7 @@ from app.routes.auth import router as auth_router
 # 1. Initialize Socket.io Async Server
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins="*"
+    cors_allowed_origins=CORS_ORIGINS if CORS_ORIGINS else ["http://localhost:3000", "http://localhost:5173"]
 )
 
 set_sio_server(sio)
@@ -38,39 +38,51 @@ fastapi_app = FastAPI(
 
 fastapi_app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=".*",
+    allow_origins=CORS_ORIGINS if CORS_ORIGINS else ["http://localhost:3000", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 @fastapi_app.on_event("startup")
-async def preload_enrolled_face_embeddings():
-    """Pre-loads all registered face embeddings into the in-memory fast matching registry on boot."""
-    from app.database import supabase_client
+async def startup_event():
+    """
+    Application startup:
+    1. Initialize PostgreSQL — verify connection, create tables, seed geofence.
+    2. Pre-load all enrolled face embeddings from PostgreSQL into the in-memory
+       vectorized matching registry.
+    """
+    from app.database import init_db, get_db_context
+    from app.models.db_models import User
     from app.services.face_recognition_service import face_service
-    if supabase_client:
-        try:
-            res = supabase_client.table("users")\
-                .select("id, name, hall_ticket_no, face_descriptor")\
-                .eq("face_enrollment_status", "enrolled")\
-                .execute()
-            if res.data:
-                loaded = 0
-                for u in res.data:
-                    ht = u.get("hall_ticket_no")
-                    desc = u.get("face_descriptor")
-                    if ht and desc and isinstance(desc, list) and len(desc) in (128, 512):
-                        face_service.register_embedding(
-                            hall_ticket=ht,
-                            vector=desc,
-                            name=u.get("name"),
-                            student_id=str(u.get("id"))
-                        )
-                        loaded += 1
-                print(f"🚀 [Face AI] Preloaded {loaded} active face vector embeddings into vectorized matrix.")
-        except Exception as e:
-            print(f"⚠️ [Face AI] Preload note: {e}")
+
+    # --- Step 1: PostgreSQL init ---
+    init_db()
+
+    # --- Step 2: Pre-load face embeddings from PostgreSQL ---
+    try:
+        with get_db_context() as db:
+            enrolled_users = (
+                db.query(User)
+                .filter(User.face_enrollment_status == "enrolled")
+                .filter(User.face_descriptor.isnot(None))
+                .all()
+            )
+            loaded = 0
+            for u in enrolled_users:
+                ht = u.hall_ticket_no
+                desc = u.face_descriptor
+                if ht and desc and isinstance(desc, list) and len(desc) in (128, 512):
+                    face_service.register_embedding(
+                        hall_ticket=ht,
+                        vector=desc,
+                        name=u.name,
+                        student_id=str(u.id)
+                    )
+                    loaded += 1
+            print(f"🚀 [Face AI] Preloaded {loaded} active face vector embeddings from PostgreSQL.")
+    except Exception as e:
+        print(f"⚠️ [Face AI] Preload note: {e}")
 
 # 3. Mount Routers
 fastapi_app.include_router(health_router)

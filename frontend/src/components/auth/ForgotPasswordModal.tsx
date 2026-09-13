@@ -28,7 +28,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [generatedOtp, setGeneratedOtp] = useState<string | null>(null);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +44,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       setOtp('');
       setNewPassword('');
       setConfirmPassword('');
-      setGeneratedOtp(null);
     }
   }, [isOpen, initialEmail]);
 
@@ -59,10 +57,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
       const cleanEmail = email.trim().toLowerCase();
       const res = await requestPasswordReset(cleanEmail);
       if (res.success) {
-        if (res.otpCode) {
-          setGeneratedOtp(res.otpCode);
-          setOtp(res.otpCode); // Pre-fill for seamless verification
-        }
         setSuccessMsg(res.message);
         setStep('verify');
       } else {
@@ -235,19 +229,6 @@ export const ForgotPasswordModal: React.FC<ForgotPasswordModalProps> = ({
                 Change
               </button>
             </div>
-
-            {/* Generated OTP Display in dev mode */}
-            {generatedOtp && (
-              <div className="p-3 rounded-xl bg-teal-50 dark:bg-teal-950/30 border border-teal-200 dark:border-teal-800 text-xs flex items-center justify-between">
-                <span className="text-teal-700 dark:text-teal-300 font-semibold flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 text-teal-600" />
-                  Institutional OTP Code:
-                </span>
-                <span className="font-mono font-extrabold text-sm tracking-widest text-teal-800 dark:text-teal-200 bg-white dark:bg-slate-900 px-2.5 py-1 rounded-lg border border-teal-300 dark:border-teal-700">
-                  {generatedOtp}
-                </span>
-              </div>
-            )}
 
             {/* 6-Digit OTP Input */}
             <div>
