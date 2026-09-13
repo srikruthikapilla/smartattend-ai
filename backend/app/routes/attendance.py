@@ -102,7 +102,7 @@ def get_or_create_valid_session_id(
 
 @router.get("/records")
 def get_all_attendance_records(
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
     db: Session = Depends(get_db)
 ):
     """

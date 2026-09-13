@@ -24,7 +24,7 @@ export const LiveAttendanceRoster: React.FC<LiveAttendanceRosterProps> = ({
   defaultSection = "ALL",
   showSectionFilter = true
 }) => {
-  const { approvedStudents } = useAuth();
+  const { users, approvedStudents } = useAuth();
   const {
     activeSession,
     attendanceRecords,
@@ -44,25 +44,24 @@ export const LiveAttendanceRoster: React.FC<LiveAttendanceRosterProps> = ({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lookupStudentHt, setLookupStudentHt] = useState<string | null>(null);
 
-  // Extract unique branches and sections available among approved students
-  const availableBranches = useMemo(() => {
-    const set = new Set<string>();
-    approvedStudents.forEach(s => { if (s.branch) set.add(s.branch); });
-    return Array.from(set);
-  }, [approvedStudents]);
+  // All enrolled students (fallback to approvedStudents if users isn't loaded yet)
+  const enrolledStudents = useMemo(() => {
+    const students = users.filter(u => u.role === 'student');
+    return students.length > 0 ? students : approvedStudents;
+  }, [users, approvedStudents]);
 
-  const availableSections = useMemo(() => {
-    const set = new Set<string>();
-    approvedStudents.forEach(s => { if (s.section) set.add(s.section); });
-    return Array.from(set);
-  }, [approvedStudents]);
-
-  // Filter students based on branch, section, status, and search query
+  // Combine enrolled students with live attendance records so all active students show
   const rosterData = useMemo(() => {
-    return approvedStudents.map(student => {
+    const accountedHt = new Set<string>();
+    const accountedUid = new Set<string>();
+
+    const rows = enrolledStudents.map(student => {
       const sHt = (student.hallTicketNo || '').trim().toUpperCase();
       const sName = (student.name || '').trim().toLowerCase();
       const sUid = (student.uid || '').trim();
+
+      if (sHt) accountedHt.add(sHt);
+      if (sUid) accountedUid.add(sUid);
 
       // Find matching attendance record for the active session (or most recent record)
       const record = attendanceRecords.find(r => {
@@ -86,7 +85,56 @@ export const LiveAttendanceRoster: React.FC<LiveAttendanceRosterProps> = ({
         status
       };
     });
-  }, [approvedStudents, attendanceRecords]);
+
+    // Also include any students in attendanceRecords not already in enrolledStudents
+    attendanceRecords.forEach(record => {
+      const rHt = (record.hallTicketNo || '').trim().toUpperCase();
+      const rId = (record.studentId || '').trim();
+
+      const alreadyIncluded =
+        (rHt && accountedHt.has(rHt)) ||
+        (rId && accountedUid.has(rId)) ||
+        rows.some(row => (row.student.hallTicketNo || '').trim().toUpperCase() === rHt);
+
+      if (!alreadyIncluded && (rHt || record.studentName)) {
+        if (rHt) accountedHt.add(rHt);
+        if (rId) accountedUid.add(rId);
+
+        const synthStudent: any = {
+          uid: rId || rHt || `rec_${record.recordId}`,
+          name: record.studentName || `Student (${rHt})`,
+          hallTicketNo: rHt || record.studentId || 'Pending',
+          branch: record.branch || 'CSM',
+          section: record.section || 'A',
+          year: record.year || 3,
+          role: 'student',
+          status: 'approved',
+          college: 'Swarna Bharathi Institute of Science and Technology (SBIT)'
+        };
+
+        rows.push({
+          student: synthStudent,
+          record,
+          status: (record.status as any) || 'present'
+        });
+      }
+    });
+
+    return rows;
+  }, [enrolledStudents, attendanceRecords]);
+
+  // Extract unique branches and sections available among all students and records
+  const availableBranches = useMemo(() => {
+    const set = new Set<string>();
+    rosterData.forEach(r => { if (r.student.branch) set.add(r.student.branch); });
+    return Array.from(set);
+  }, [rosterData]);
+
+  const availableSections = useMemo(() => {
+    const set = new Set<string>();
+    rosterData.forEach(r => { if (r.student.section) set.add(r.student.section); });
+    return Array.from(set);
+  }, [rosterData]);
 
   // Apply filters
   const filteredRoster = useMemo(() => {

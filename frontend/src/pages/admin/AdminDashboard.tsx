@@ -9,17 +9,18 @@ import { LiveAttendanceRoster } from '../../components/attendance/LiveAttendance
 import { exportAttendanceToExcel } from '../../utils/excelGenerator';
 import { LeafletMap } from '../../components/gps/LeafletMap';
 import { StudentAttendanceLookupModal } from '../../components/attendance/StudentAttendanceLookupModal';
+import { AdminModal } from '../../components/admin/AdminModal';
 import { UserProfile } from '../../types/auth';
 import {
   Users, UserCheck, Search, MapPin, PlusCircle, ShieldCheck,
   Download, TrendingUp, TrendingDown, Radio,
   MoreVertical, UserPlus, MessageSquare,
-  GraduationCap, BarChart3, Pencil, Trash2, Plus, Mail, Phone, FileSpreadsheet
+  GraduationCap, BarChart3, Pencil, Trash2, Plus, Mail, Phone, FileSpreadsheet, Shield
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 export const AdminDashboard: React.FC = () => {
-  const { users, pendingStudents, updateStudentStatus, deleteUser } = useAuth();
+  const { users, currentUser, pendingStudents, updateStudentStatus, deleteUser, refreshUsers } = useAuth();
   const { activeSession, attendanceRecords, geofence } = useAttendance();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -27,6 +28,7 @@ export const AdminDashboard: React.FC = () => {
   const [isGPSModalOpen, setIsGPSModalOpen] = useState(false);
   const [isInsertModalOpen, setIsInsertModalOpen] = useState(false);
   const [isFacultyModalOpen, setIsFacultyModalOpen] = useState(false);
+  const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [isStudentLookupOpen, setIsStudentLookupOpen] = useState(false);
   const [selectedStudentLookup, setSelectedStudentLookup] = useState('');
   const [facultyToEdit, setFacultyToEdit] = useState<UserProfile | null>(null);
@@ -97,11 +99,19 @@ export const AdminDashboard: React.FC = () => {
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
           <button
+            onClick={() => setIsAdminModalOpen(true)}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold font-heading flex items-center gap-2 transition-all shadow-xs hover:shadow-indigo-500/20 active:scale-[0.98]"
+            title="Manage administrators, add new admins, or delete accounts"
+          >
+            <Shield className="w-4 h-4" />
+            <span>Manage Admins</span>
+          </button>
+          <button
             onClick={() => {
               setSelectedStudentLookup('');
               setIsStudentLookupOpen(true);
             }}
-            className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold font-heading flex items-center gap-2 transition-all shadow-xs hover:shadow-indigo-500/20 active:scale-[0.98]"
+            className="bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold font-heading flex items-center gap-2 transition-all shadow-xs active:scale-[0.98]"
             title="Lookup student attendance records & eligibility"
           >
             <UserCheck className="w-4 h-4" />
@@ -502,9 +512,14 @@ export const AdminDashboard: React.FC = () => {
                             <Pencil className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => {
-                              if (window.confirm(`Are you sure you want to remove ${f.name}?`)) {
-                                deleteUser(f.uid);
+                            onClick={async () => {
+                              if (window.confirm(`Are you sure you want to remove faculty member ${f.name} (${f.email})?`)) {
+                                try {
+                                  await deleteUser(f.uid || f.email);
+                                  await refreshUsers();
+                                } catch (err: any) {
+                                  alert(err.message || 'Failed to remove faculty member.');
+                                }
                               }
                             }}
                             className="p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-950/40 text-slate-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
@@ -529,6 +544,108 @@ export const AdminDashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* Administrators Management Table */}
+      <div className="mt-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+        <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <ShieldCheck className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">System Administrators</h3>
+            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-900/40">
+              {users.filter(u => u.role === 'admin').length} Active
+            </span>
+          </div>
+          <button
+            onClick={() => setIsAdminModalOpen(true)}
+            className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 transition shrink-0 shadow-xs"
+            title="Add new administrator or manage accounts"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add Administrator</span>
+          </button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700 text-[11px] text-slate-500 dark:text-slate-400 uppercase tracking-wider font-semibold">
+                <th className="p-4">Administrator Name</th>
+                <th className="p-4">Email</th>
+                <th className="p-4">Designation</th>
+                <th className="p-4">Privilege Level</th>
+                <th className="p-4 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="text-sm divide-y divide-slate-100 dark:divide-slate-800">
+              {users.filter(u => u.role === 'admin').map((adm) => {
+                const isCurrent = currentUser?.uid === adm.uid || currentUser?.email.toLowerCase() === adm.email.toLowerCase();
+                const totalAdmins = users.filter(u => u.role === 'admin').length;
+                return (
+                  <tr key={adm.uid} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                    <td className="p-4 flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-indigo-600 text-white font-bold flex items-center justify-center text-[11px]">
+                        {(adm.name || 'A').substring(0, 2).toUpperCase()}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-900 dark:text-white">{adm.name}</span>
+                        {isCurrent && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">
+                            Current
+                          </span>
+                        )}
+                      </div>
+                    </td>
+
+                    <td className="p-4 text-slate-500 dark:text-slate-400">
+                      {adm.email}
+                    </td>
+
+                    <td className="p-4 text-slate-500 dark:text-slate-400">
+                      {adm.designation || 'System Administrator'}
+                    </td>
+
+                    <td className="p-4">
+                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-bold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800">
+                        Super Administrator
+                      </span>
+                    </td>
+
+                    <td className="p-4 text-right">
+                      <button
+                        onClick={async () => {
+                          if (totalAdmins <= 1) {
+                            alert('Cannot delete the only remaining administrator account. Please create another administrator before deleting this account.');
+                            return;
+                          }
+                          const msg = isCurrent
+                            ? `Are you sure you want to remove your own administrator account (${adm.email})? You will be logged out.`
+                            : `Are you sure you want to remove administrator ${adm.name} (${adm.email})?`;
+                          if (window.confirm(msg)) {
+                            try {
+                              await deleteUser(adm.uid);
+                            } catch (err: any) {
+                              alert(err.message || 'Failed to delete administrator account.');
+                            }
+                          }
+                        }}
+                        disabled={totalAdmins <= 1}
+                        className={`p-1.5 rounded-md border transition ${
+                          totalAdmins <= 1
+                            ? 'opacity-30 cursor-not-allowed text-slate-400 border-slate-200 dark:border-slate-800'
+                            : 'hover:bg-red-50 dark:hover:bg-red-950/40 text-slate-400 hover:text-red-600 dark:hover:text-red-400 border-transparent hover:border-red-200 dark:hover:border-red-800'
+                        }`}
+                        title={totalAdmins <= 1 ? 'Cannot delete the only remaining administrator' : 'Delete administrator'}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <GPSConfigModal isOpen={isGPSModalOpen} onClose={() => setIsGPSModalOpen(false)} />
       <InsertStudentModal isOpen={isInsertModalOpen} onClose={() => setIsInsertModalOpen(false)} />
       <StudentAttendanceLookupModal
@@ -543,6 +660,10 @@ export const AdminDashboard: React.FC = () => {
           setFacultyToEdit(null);
         }}
         facultyToEdit={facultyToEdit}
+      />
+      <AdminModal
+        isOpen={isAdminModalOpen}
+        onClose={() => setIsAdminModalOpen(false)}
       />
     </div>
   );

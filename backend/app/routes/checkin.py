@@ -19,7 +19,7 @@ from sqlalchemy import desc, or_, func
 from app.config import JWT_SECRET
 from app.models.schemas import VerifyCheckinPayload
 from app.models.db_models import (
-    User,
+    Student,
     AttendanceSession,
     AttendanceRecord,
     StudentFaceEmbedding,
@@ -80,15 +80,15 @@ def _load_enrolled_face_descriptor(hall_ticket: str) -> Optional[List[float]]:
 
     try:
         with get_db_context() as db:
-            # 1. Check users table
-            user = (
-                db.query(User)
-                .filter(func.upper(User.hall_ticket_no) == normalized_ht)
+            # 1. Check students table
+            student = (
+                db.query(Student)
+                .filter(func.upper(Student.hall_ticket_no) == normalized_ht)
                 .first()
             )
-            if user and user.face_descriptor and isinstance(user.face_descriptor, list) and len(user.face_descriptor) in (128, 512):
-                logger.info(f"[Face] Loaded enrolled descriptor from PostgreSQL users for {normalized_ht}")
-                return user.face_descriptor
+            if student and student.face_descriptor and isinstance(student.face_descriptor, list) and len(student.face_descriptor) in (128, 512):
+                logger.info(f"[Face] Loaded enrolled descriptor from PostgreSQL students for {normalized_ht}")
+                return student.face_descriptor
 
             # 2. Check student_face_embeddings table
             emb = (
@@ -284,22 +284,22 @@ def get_student_enrollment_status(hall_ticket: str, db: Session = Depends(get_db
     is_bio_enrolled = False
 
     try:
-        user = db.query(User).filter(
+        student = db.query(Student).filter(
             or_(
-                func.upper(User.hall_ticket_no) == ht,
-                func.lower(User.email).like(f"{ht.lower()}@%")
+                func.upper(Student.hall_ticket_no) == ht,
+                func.lower(Student.email).like(f"{ht.lower()}@%")
             )
         ).first()
 
-        if user:
-            student_name = user.name or student_name
-            branch = user.branch or branch
-            section = user.section or section
-            year = int(user.year or 3)
-            if not enrolled_desc and user.face_descriptor:
-                if isinstance(user.face_descriptor, list) and len(user.face_descriptor) in (128, 512):
-                    enrolled_desc = user.face_descriptor
-            is_bio_enrolled = (user.biometric_enrollment_status == "enrolled") or bool(user.biometric_credential_id)
+        if student:
+            student_name = student.name or student_name
+            branch = student.branch or branch
+            section = student.section or section
+            year = int(student.year or 3)
+            if not enrolled_desc and student.face_descriptor:
+                if isinstance(student.face_descriptor, list) and len(student.face_descriptor) in (128, 512):
+                    enrolled_desc = student.face_descriptor
+            is_bio_enrolled = (student.biometric_enrollment_status == "enrolled") or bool(student.biometric_credential_id)
     except Exception as e:
         logger.warning(f"PostgreSQL student lookup note: {e}")
 
@@ -379,15 +379,15 @@ def reset_student_biometrics(hall_ticket: str, db: Session = Depends(get_db)):
         student_profiles[ht]["faceDescriptor"] = None
 
     try:
-        user = db.query(User).filter(func.upper(User.hall_ticket_no) == ht).first()
-        if user:
-            user.face_descriptor = None
-            user.face_enrollment_status = "pending"
-            user.face_enrolled_at = None
-            user.biometric_credential_id = None
-            user.biometric_enrollment_status = "pending"
-            user.biometric_enrolled_at = None
-            user.updated_at = datetime.now(timezone.utc)
+        student = db.query(Student).filter(func.upper(Student.hall_ticket_no) == ht).first()
+        if student:
+            student.face_descriptor = None
+            student.face_enrollment_status = "pending"
+            student.face_enrolled_at = None
+            student.biometric_credential_id = None
+            student.biometric_enrollment_status = "pending"
+            student.biometric_enrolled_at = None
+            student.updated_at = datetime.now(timezone.utc)
 
         db.query(StudentFaceEmbedding).filter(
             func.upper(StudentFaceEmbedding.hall_ticket_no) == ht
@@ -420,16 +420,16 @@ def clear_all_registered_biometrics(db: Session = Depends(get_db)):
     face_service._keys_512.clear()
 
     try:
-        users = db.query(User).all()
+        students = db.query(Student).all()
         now_dt = datetime.now(timezone.utc)
-        for u in users:
-            u.face_descriptor = None
-            u.face_enrollment_status = "pending"
-            u.face_enrolled_at = None
-            u.biometric_credential_id = None
-            u.biometric_enrollment_status = "pending"
-            u.biometric_enrolled_at = None
-            u.updated_at = now_dt
+        for s in students:
+            s.face_descriptor = None
+            s.face_enrollment_status = "pending"
+            s.face_enrolled_at = None
+            s.biometric_credential_id = None
+            s.biometric_enrollment_status = "pending"
+            s.biometric_enrolled_at = None
+            s.updated_at = now_dt
 
         db.query(StudentFaceEmbedding).delete()
         db.commit()
@@ -500,17 +500,18 @@ def register_student_biometrics(
 
     now_dt = datetime.now(timezone.utc)
     try:
-        user = db.query(User).filter(func.upper(User.hall_ticket_no) == ht).first()
-        if user:
-            user.face_descriptor = face_descriptor
-            user.face_enrollment_status = "enrolled" if face_descriptor else "pending"
-            user.face_enrolled_at = now_dt if face_descriptor else None
-            user.biometric_credential_id = bio_credential_id
-            user.biometric_enrollment_status = "enrolled" if bio_credential_id else "pending"
-            user.biometric_enrolled_at = now_dt if bio_credential_id else None
-            user.updated_at = now_dt
+        student = db.query(Student).filter(func.upper(Student.hall_ticket_no) == ht).first()
+        if student:
+            student.face_descriptor = face_descriptor
+            student.face_enrollment_status = "enrolled" if face_descriptor else "pending"
+            student.face_enrolled_at = now_dt if face_descriptor else None
+            student.biometric_credential_id = bio_credential_id
+            student.biometric_enrollment_status = "enrolled" if bio_credential_id else "pending"
+            student.biometric_enrolled_at = now_dt if bio_credential_id else None
+            student.status = "approved"
+            student.updated_at = now_dt
         else:
-            user = User(
+            student = Student(
                 id=uuid.uuid4(),
                 email=f"{ht.lower()}@sbit.ac.in",
                 hall_ticket_no=ht,
@@ -519,6 +520,7 @@ def register_student_biometrics(
                 status="approved",
                 branch=branch,
                 section=section,
+                year=str(year or 3),
                 face_descriptor=face_descriptor,
                 face_enrollment_status="enrolled" if face_descriptor else "pending",
                 face_enrolled_at=now_dt if face_descriptor else None,
@@ -528,13 +530,14 @@ def register_student_biometrics(
                 created_at=now_dt,
                 updated_at=now_dt
             )
-            db.add(user)
+            db.add(student)
 
         # Update student_face_embeddings
         if face_descriptor:
             emb = db.query(StudentFaceEmbedding).filter_by(hall_ticket_no=ht).first()
             algo = "arcface_512" if len(face_descriptor) == 512 else "facenet_128"
             if emb:
+                emb.student_id = student.id
                 emb.embedding_vector = face_descriptor
                 emb.embedding_dim = len(face_descriptor)
                 emb.algorithm = algo
@@ -542,7 +545,7 @@ def register_student_biometrics(
             else:
                 emb = StudentFaceEmbedding(
                     id=uuid.uuid4(),
-                    user_id=user.id,
+                    student_id=student.id,
                     hall_ticket_no=ht,
                     embedding_vector=face_descriptor,
                     embedding_dim=len(face_descriptor),
@@ -556,7 +559,7 @@ def register_student_biometrics(
 
         db.commit()
     except Exception as e:
-        logger.warning(f"PostgreSQL user biometric update note: {e}")
+        logger.warning(f"PostgreSQL student biometric update note: {e}")
 
     return {
         "success": True,
@@ -586,21 +589,21 @@ def get_student_attendance_history(hall_ticket: str, db: Session = Depends(get_d
     bio_status = "pending"
 
     try:
-        user = db.query(User).filter(
+        student = db.query(Student).filter(
             or_(
-                func.upper(User.hall_ticket_no) == ht,
-                func.lower(User.email).like(f"{ht.lower()}@%")
+                func.upper(Student.hall_ticket_no) == ht,
+                func.lower(Student.email).like(f"{ht.lower()}@%")
             )
         ).first()
-        if user:
-            student_name = user.name or student_name
-            branch = user.branch or branch
-            section = user.section or section
-            year = int(user.year or 3)
-            email = user.email or ""
-            status_val = user.status or "approved"
-            face_status = user.face_enrollment_status or ("enrolled" if user.face_descriptor else "pending")
-            bio_status = user.biometric_enrollment_status or ("enrolled" if user.biometric_credential_id else "pending")
+        if student:
+            student_name = student.name or student_name
+            branch = student.branch or branch
+            section = student.section or section
+            year = int(student.year or 3)
+            email = student.email or ""
+            status_val = student.status or "approved"
+            face_status = student.face_enrollment_status or ("enrolled" if student.face_descriptor else "pending")
+            bio_status = student.biometric_enrollment_status or ("enrolled" if student.biometric_credential_id else "pending")
     except Exception as e:
         logger.warning(f"Student profile fetch note: {e}")
 
@@ -888,16 +891,16 @@ async def verify_student_checkin(
     real_branch = branch
     real_section = section
     try:
-        u = db.query(User).filter(
+        s = db.query(Student).filter(
             or_(
-                func.upper(User.hall_ticket_no) == hall_ticket,
-                func.lower(User.email).like(f"{hall_ticket.lower()}@%")
+                func.upper(Student.hall_ticket_no) == hall_ticket,
+                func.lower(Student.email).like(f"{hall_ticket.lower()}@%")
             )
         ).first()
-        if u:
-            real_student_name = u.name or real_student_name
-            real_branch = u.branch or real_branch
-            real_section = u.section or real_section
+        if s:
+            real_student_name = s.name or real_student_name
+            real_branch = s.branch or real_branch
+            real_section = s.section or real_section
     except Exception as e:
         logger.warning(f"Student name lookup error in checkin: {e}")
 
@@ -999,21 +1002,21 @@ def sync_embeddings(db: Session = Depends(get_db)):
     """
     embeddings_list = []
 
-    # 1. From PostgreSQL users table
+    # 1. From PostgreSQL students table
     try:
-        users = (
-            db.query(User)
-            .filter(User.face_descriptor.isnot(None))
+        students = (
+            db.query(Student)
+            .filter(Student.face_descriptor.isnot(None))
             .all()
         )
-        for u in users:
-            ht = u.hall_ticket_no
-            desc_val = u.face_descriptor
+        for s in students:
+            ht = s.hall_ticket_no
+            desc_val = s.face_descriptor
             if ht and desc_val:
                 embeddings_list.append({
                     "studentId": ht,
                     "faceDescriptor": desc_val,
-                    "updatedAt": u.face_enrolled_at.isoformat() if u.face_enrolled_at else None
+                    "updatedAt": s.face_enrolled_at.isoformat() if s.face_enrolled_at else None
                 })
     except Exception as e:
         logger.error(f"Error querying student embeddings from PostgreSQL: {e}")

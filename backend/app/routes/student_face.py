@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 
 from app.models.schemas import FaceEmbeddingPayload, FaceEnrollmentRequest
-from app.models.db_models import User, StudentFaceEmbedding, AuditLog
+from app.models.db_models import Student, StudentFaceEmbedding, AuditLog
 from app.database import get_db
 from app.dependencies.auth import get_current_user
 from app.services.face_recognition_service import face_service
@@ -95,22 +95,22 @@ def verify_student_ownership(student_id: str, current_user: Dict[str, Any]):
     )
 
 
-def _find_user(db: Session, student_id: str, normalized_ht: Optional[str] = None) -> Optional[User]:
-    """Helper to locate user by UUID or hall ticket in PostgreSQL."""
+def _find_user(db: Session, student_id: str, normalized_ht: Optional[str] = None) -> Optional[Student]:
+    """Helper to locate student by UUID or hall ticket in PostgreSQL."""
     try:
         uid = uuid.UUID(student_id)
-        user = db.query(User).filter(User.id == uid).first()
-        if user:
-            return user
+        student = db.query(Student).filter(Student.id == uid).first()
+        if student:
+            return student
     except Exception:
         pass
 
     if normalized_ht:
-        user = db.query(User).filter(func.upper(User.hall_ticket_no) == normalized_ht).first()
-        if user:
-            return user
+        student = db.query(Student).filter(func.upper(Student.hall_ticket_no) == normalized_ht).first()
+        if student:
+            return student
 
-    return db.query(User).filter(func.upper(User.hall_ticket_no) == _normalize_student_key(student_id)).first()
+    return db.query(Student).filter(func.upper(Student.hall_ticket_no) == _normalize_student_key(student_id)).first()
 
 
 @router.post("/{student_id}/enroll-face")

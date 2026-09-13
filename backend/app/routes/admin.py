@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.models.schemas import GeofenceUpdatePayload
-from app.models.db_models import User, AttendanceSession, AttendanceRecord, GeofenceConfig
+from app.models.db_models import Admin, Faculty, Student, AttendanceSession, AttendanceRecord, GeofenceConfig
 from app.utils.geofence import current_geofence, update_geofence
 from app.database import get_db
 from app.dependencies.auth import require_role
@@ -22,21 +22,25 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/admin",
-    tags=["Admin Portal"],
-    dependencies=[Depends(require_role("admin"))]
+    tags=["Admin Portal"]
 )
 
-@router.get("/stats")
+@router.get("/stats", dependencies=[Depends(require_role("admin"))])
 def get_admin_stats(db: Session = Depends(get_db)):
     """
     Retrieve platform status & stats for Admin dashboard from PostgreSQL.
     Requires Admin authorization.
     """
     try:
-        total_users = db.query(func.count(User.id)).scalar() or 0
-        total_students = db.query(func.count(User.id)).filter(User.role == "student").scalar() or 0
-        total_faculty = db.query(func.count(User.id)).filter(User.role == "faculty").scalar() or 0
-        pending_approvals = db.query(func.count(User.id)).filter(User.status == "pending").scalar() or 0
+        total_students = db.query(func.count(Student.id)).scalar() or 0
+        total_faculty = db.query(func.count(Faculty.id)).scalar() or 0
+        total_admins = db.query(func.count(Admin.id)).scalar() or 0
+        total_users = total_students + total_faculty + total_admins
+
+        pending_student_approvals = db.query(func.count(Student.id)).filter(Student.status == "pending").scalar() or 0
+        pending_faculty_approvals = db.query(func.count(Faculty.id)).filter(Faculty.status == "pending").scalar() or 0
+        pending_approvals = pending_student_approvals + pending_faculty_approvals
+
         total_sessions = db.query(func.count(AttendanceSession.id)).scalar() or 0
         total_records = db.query(func.count(AttendanceRecord.id)).scalar() or 0
     except Exception as e:
@@ -47,6 +51,7 @@ def get_admin_stats(db: Session = Depends(get_db)):
         "totalUsers": total_users,
         "totalStudents": total_students,
         "totalFaculty": total_faculty,
+        "totalAdmins": total_admins,
         "pendingApprovals": pending_approvals,
         "totalSessions": total_sessions,
         "totalRecords": total_records,
@@ -70,7 +75,7 @@ def get_geofence(db: Session = Depends(get_db)):
         "geofence": current_geofence
     }
 
-@router.put("/geofence")
+@router.put("/geofence", dependencies=[Depends(require_role("admin"))])
 def update_geofence_config(payload: GeofenceUpdatePayload, db: Session = Depends(get_db)):
     """
     Update campus center point + allowed radius in PostgreSQL.

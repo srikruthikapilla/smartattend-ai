@@ -3,8 +3,7 @@ import jwt
 from typing import Optional, List, Union, Dict, Any
 from fastapi import Header, HTTPException, Depends, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from app.config import JWT_SECRET, SUPABASE_JWT_SECRET, EDGE_API_KEY
-from app.database import supabase_auth
+from app.config import JWT_SECRET, EDGE_API_KEY
 
 security_scheme = HTTPBearer(auto_error=False)
 
@@ -14,7 +13,7 @@ def get_current_user(
 ) -> Dict[str, Any]:
     """
     Validates Bearer token from HTTP Authorization header.
-    Supports Supabase Auth JWTs and locally signed JWT tokens.
+    Decodes and verifies native JWT tokens signed with JWT_SECRET (HS256).
     Fails closed: Any missing, expired, or invalid token raises HTTP 401.
     """
     token = None
@@ -30,54 +29,26 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"}
         )
 
-    # 1. Try Supabase Auth get_user if auth client is connected
-    if supabase_auth:
-        try:
-            res = supabase_auth.auth.get_user(token)
-            if res and res.user:
-                u = res.user
-                role = "student"
-                user_metadata = getattr(u, "user_metadata", {}) or {}
-                app_metadata = getattr(u, "app_metadata", {}) or {}
-                if isinstance(user_metadata, dict) and user_metadata.get("role"):
-                    role = user_metadata.get("role")
-                elif isinstance(app_metadata, dict) and app_metadata.get("role"):
-                    role = app_metadata.get("role")
+    if not JWT_SECRET:
+        raise HTTPException(
+            status_code=500,
+            detail="Server authentication configuration error: JWT_SECRET not configured."
+        )
 
-                return {
-                    "id": u.id,
-                    "sub": u.id,
-                    "email": u.email,
-                    "role": role,
-                    "user_metadata": user_metadata
-                }
-        except Exception:
-            pass  # Fallback to direct JWT decode below
-
-    # 2. Try decoding JWT with configured secrets
-    secrets_to_try = [s for s in [JWT_SECRET, SUPABASE_JWT_SECRET] if s]
-    decoded_payload = None
-
-    for sec in secrets_to_try:
-        try:
-            decoded = jwt.decode(
-                token,
-                sec,
-                algorithms=["HS256"],
-                options={"verify_signature": True}
-            )
-            decoded_payload = decoded
-            break
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(
-                status_code=401,
-                detail="Authentication token has expired. Please log in again.",
-                headers={"WWW-Authenticate": "Bearer"}
-            )
-        except Exception:
-            continue
-
-    if not decoded_payload:
+    try:
+        decoded_payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=["HS256"],
+            options={"verify_signature": True}
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication token has expired. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+    except Exception as e:
         raise HTTPException(
             status_code=401,
             detail="Invalid or unverified authentication token.",
@@ -91,6 +62,7 @@ def get_current_user(
         "id": user_id,
         "sub": user_id,
         "email": decoded_payload.get("email"),
+        "name": decoded_payload.get("name"),
         "role": role,
         "payload": decoded_payload
     }

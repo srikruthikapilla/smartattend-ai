@@ -53,7 +53,7 @@ async def startup_event():
        vectorized matching registry.
     """
     from app.database import init_db, get_db_context
-    from app.models.db_models import User
+    from app.models.db_models import Student
     from app.services.face_recognition_service import face_service
 
     # --- Step 1: PostgreSQL init ---
@@ -62,14 +62,14 @@ async def startup_event():
     # --- Step 2: Pre-load face embeddings from PostgreSQL ---
     try:
         with get_db_context() as db:
-            enrolled_users = (
-                db.query(User)
-                .filter(User.face_enrollment_status == "enrolled")
-                .filter(User.face_descriptor.isnot(None))
+            enrolled_students = (
+                db.query(Student)
+                .filter(Student.face_enrollment_status == "enrolled")
+                .filter(Student.face_descriptor.isnot(None))
                 .all()
             )
             loaded = 0
-            for u in enrolled_users:
+            for u in enrolled_students:
                 ht = u.hall_ticket_no
                 desc = u.face_descriptor
                 if ht and desc and isinstance(desc, list) and len(desc) in (128, 512):

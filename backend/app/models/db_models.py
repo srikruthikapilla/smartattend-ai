@@ -1,18 +1,18 @@
 """
 Smart Attend — SQLAlchemy ORM Models
 =====================================
-Declarative models mapping to the PostgreSQL schema defined in
-backend/db/postgresql_schema.sql.
-
-All database tables are defined here. The Supabase Python SDK is NOT used
-for table access anywhere in the codebase — only for Supabase Auth.
+Declarative models mapping to the PostgreSQL schema.
+Dedicated tables for:
+  - Admin (System Administrator - Auth Enabled)
+  - Faculty (Teaching Staff - Auth Enabled)
+  - Student (Enrolled Roster & Face AI - Biometric / QR only, NO password auth)
 """
 
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, String, Integer, Float, Boolean, Text,
-    DateTime, ForeignKey, UniqueConstraint, CheckConstraint, Index, JSON
+    DateTime, ForeignKey, UniqueConstraint, CheckConstraint, Index
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import DeclarativeBase, relationship
@@ -23,30 +23,91 @@ class Base(DeclarativeBase):
     pass
 
 
-class User(Base):
-    __tablename__ = "users"
+class Admin(Base):
+    __tablename__ = "admins"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=False)
-    password_hash = Column(String(255), nullable=True)
-    role = Column(String(50), nullable=False, default="student")
+    password_hash = Column(String(255), nullable=False)
     name = Column(String(255), nullable=False)
     phone = Column(String(50), nullable=True)
+    role = Column(String(50), nullable=False, default="admin")
+    designation = Column(String(100), default="System Administrator")
     college = Column(String(255), default="Swarna Bharathi Institute of Science and Technology (SBIT)")
     status = Column(String(50), nullable=False, default="approved")
 
-    # Student Academic Fields (Unique per student)
-    hall_ticket_no = Column(String(10), unique=True, nullable=True)
-    branch = Column(String(50), nullable=True)
-    section = Column(String(10), nullable=True)
-    year = Column(String(10), default="1")
-    semester = Column(String(10), default="1")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
 
-    # Faculty Fields
-    designation = Column(String(100), nullable=True)
-    department = Column(String(100), nullable=True)
-    assigned_branch = Column(String(50), nullable=True)
-    assigned_sections = Column(JSONB, default=list)
+    def to_dict(self):
+        return {
+            "id": str(self.id),
+            "email": self.email,
+            "role": "admin",
+            "name": self.name,
+            "phone": self.phone,
+            "college": self.college,
+            "designation": self.designation,
+            "status": self.status,
+            "createdAt": self.created_at.isoformat() if self.created_at else None,
+            "updatedAt": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class Faculty(Base):
+    __tablename__ = "faculty"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String(255), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=False)
+    phone = Column(String(50), nullable=True)
+    role = Column(String(50), nullable=False, default="faculty")
+    designation = Column(String(100), default="Assistant Professor")
+    department = Column(String(100), default="Computer Science & Engineering")
+    assigned_branch = Column(String(50), default="CSM")
+    assigned_sections = Column(JSONB, default=lambda: ["A", "B"])
+    college = Column(String(255), default="Swarna Bharathi Institute of Science and Technology (SBIT)")
+    status = Column(String(50), nullable=False, default="approved")
+
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            "id": str(self.id),
+            "email": self.email,
+            "role": "faculty",
+            "name": self.name,
+            "phone": self.phone,
+            "college": self.college,
+            "designation": self.designation,
+            "department": self.department,
+            "assigned_branch": self.assigned_branch,
+            "assigned_sections": self.assigned_sections or [],
+            "status": self.status,
+            "createdAt": self.created_at.isoformat() if self.created_at else None,
+            "updatedAt": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class Student(Base):
+    __tablename__ = "students"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    hall_ticket_no = Column(String(50), unique=True, nullable=False)
+    name = Column(String(255), nullable=False)
+    email = Column(String(255), unique=True, nullable=True)
+    phone = Column(String(50), nullable=True)
+    role = Column(String(50), nullable=False, default="student")
+    branch = Column(String(50), default="CSM")
+    section = Column(String(10), default="A")
+    year = Column(String(10), default="3")
+    semester = Column(String(10), default="1")
+    college = Column(String(255), default="Swarna Bharathi Institute of Science and Technology (SBIT)")
+    status = Column(String(50), nullable=False, default="approved")
 
     # Face Recognition AI 128-D Vector
     face_descriptor = Column(JSONB, nullable=True)
@@ -69,13 +130,13 @@ class User(Base):
                         onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationships
-    face_embeddings = relationship("StudentFaceEmbedding", back_populates="user", cascade="all, delete-orphan")
+    face_embeddings = relationship("StudentFaceEmbedding", back_populates="student", cascade="all, delete-orphan")
 
     def to_dict(self):
         return {
             "id": str(self.id),
             "email": self.email,
-            "role": self.role,
+            "role": "student",
             "name": self.name,
             "phone": self.phone,
             "college": self.college,
@@ -85,10 +146,6 @@ class User(Base):
             "section": self.section,
             "year": self.year,
             "semester": self.semester,
-            "designation": self.designation,
-            "department": self.department,
-            "assigned_branch": self.assigned_branch,
-            "assigned_sections": self.assigned_sections or [],
             "face_descriptor": self.face_descriptor,
             "face_enrollment_status": self.face_enrollment_status,
             "face_enrolled_at": self.face_enrolled_at.isoformat() if self.face_enrolled_at else None,
@@ -101,9 +158,13 @@ class User(Base):
             "trusted_device_registered_at": (
                 self.trusted_device_registered_at.isoformat() if self.trusted_device_registered_at else None
             ),
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "createdAt": self.created_at.isoformat() if self.created_at else None,
+            "updatedAt": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+# Legacy User symbol mapped to Student for backwards compatibility with any remaining imports
+User = Student
 
 
 class AttendanceSession(Base):
@@ -159,7 +220,7 @@ class AttendanceRecord(Base):
     session_id = Column(UUID(as_uuid=True), ForeignKey("attendance_sessions.id", ondelete="CASCADE"), nullable=True)
     student_id = Column(String(255), nullable=False)
     student_name = Column(String(255), nullable=False)
-    hall_ticket_no = Column(String(10), nullable=False)
+    hall_ticket_no = Column(String(50), nullable=False)
     branch = Column(String(50), nullable=False)
     section = Column(String(10), nullable=False)
     year = Column(Integer, nullable=False, default=3)
@@ -265,7 +326,7 @@ class StudentFaceEmbedding(Base):
     __tablename__ = "student_face_embeddings"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"), nullable=True)
     hall_ticket_no = Column(String(20), nullable=False, unique=True)
     embedding_vector = Column(JSONB, nullable=False)
     embedding_dim = Column(Integer, nullable=False, default=128)
@@ -277,12 +338,20 @@ class StudentFaceEmbedding(Base):
                         onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationships
-    user = relationship("User", back_populates="face_embeddings")
+    student = relationship("Student", back_populates="face_embeddings")
+
+    @property
+    def user_id(self):
+        return self.student_id
+
+    @user_id.setter
+    def user_id(self, val):
+        self.student_id = val
 
     def to_dict(self):
         return {
             "id": str(self.id),
-            "user_id": str(self.user_id) if self.user_id else None,
+            "student_id": str(self.student_id) if self.student_id else None,
             "hall_ticket_no": self.hall_ticket_no,
             "embedding_vector": self.embedding_vector,
             "embedding_dim": self.embedding_dim,

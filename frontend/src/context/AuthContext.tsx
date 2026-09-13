@@ -3,6 +3,7 @@ import React, {
   useContext,
   useEffect,
   useState,
+  useMemo,
 } from "react";
 
 import {
@@ -21,7 +22,6 @@ import {
   sendTrustedDeviceResetEmail,
 } from "../utils/emailNotifier";
 
-import { supabase } from "../config/supabase";
 
 interface AuthContextType {
   currentUser: UserProfile | null;
@@ -96,6 +96,20 @@ interface AuthContextType {
     }>
   ): Promise<{ addedCount: number; duplicateCount: number; errors: string[] }>;
 
+  bulkInsertFaculty(
+    facultyList: Array<{
+      name: string;
+      email: string;
+      password?: string;
+      phone?: string;
+      department?: string;
+      designation?: string;
+      assignedBranch?: string;
+      assignedSections?: string[];
+      status?: 'approved' | 'pending';
+    }>
+  ): Promise<{ addedCount: number; duplicateCount: number; errors: string[] }>;
+
   updateStudentStatus(
     uid: string,
     status: StudentStatus
@@ -106,7 +120,7 @@ interface AuthContextType {
     updates: Partial<UserProfile>
   ): void;
 
-  deleteUser(uid: string): void;
+  deleteUser(uid: string): Promise<void>;
 
   enrollStudentFace(
     uid: string,
@@ -133,6 +147,8 @@ interface AuthContextType {
 
   switchUser(uid: string): void;
 
+  refreshUsers(): Promise<void>;
+
   pendingStudents: UserProfile[];
 
   approvedStudents: UserProfile[];
@@ -147,27 +163,17 @@ export const AuthProvider: React.FC<{
   children: React.ReactNode;
 }> = ({ children }) => {
 
-  const [users, setUsers] =
-    useState<UserProfile[]>(() => {
-      const saved = localStorage.getItem("sbit_users");
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          return parsed.filter((u: UserProfile) => 
-            !['student_301', 'student_302', 'student_303', 'student_304', 'student_305', 'admin_101', 'faculty_201', 'faculty_202'].includes(u.uid) &&
-            !['p.srinivas@sbit.ac.in', 'm.radhika@sbit.ac.in', 'admin@sbit.ac.in'].includes(u.email?.toLowerCase() || '') &&
-            !['21SBIT0501', '21SBIT0502', '21SBIT0503', '22SBIT0401', '22SBIT0402'].includes(u.hallTicketNo || '')
-          );
-        } catch {
-          return [];
-        }
-      }
-      return [];
-    });
+  const [users, setUsers] = useState<UserProfile[]>([]);
 
   const [currentUser, setCurrentUser] =
     useState<UserProfile | null>(() => {
+      const token = localStorage.getItem("sbit_auth_token");
       const saved = localStorage.getItem("sbit_current_user");
+      // If there is no valid auth token in localStorage, do not restore an unauthenticated session
+      if (!token) {
+        localStorage.removeItem("sbit_current_user");
+        return null;
+      }
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
@@ -178,6 +184,7 @@ export const AuthProvider: React.FC<{
             (parsed?.name && parsed.name.toLowerCase().includes('srinivas'))
           ) {
             localStorage.removeItem("sbit_current_user");
+            localStorage.removeItem("sbit_auth_token");
             return null;
           }
           return parsed;
@@ -209,60 +216,61 @@ export const AuthProvider: React.FC<{
   }, [currentUser]);
 
   // Synchronization with backend PostgreSQL users table
-  useEffect(() => {
-    const fetchUsers = async () => {
-      const token = localStorage.getItem('sbit_auth_token');
-      if (!token) return;
+  const refreshUsers = async (): Promise<void> => {
+    const token = localStorage.getItem('sbit_auth_token');
+    if (!token) return;
 
-      const endpoints = ['/api/auth/users', 'http://localhost:5000/api/auth/users'];
-      for (const ep of endpoints) {
-        try {
-          const res = await fetch(ep, {
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.success && data.users && data.users.length > 0) {
-              const mapped: UserProfile[] = data.users.map((u: any) => ({
-                uid: u.id,
-                email: u.email,
-                name: u.name,
-                phone: u.phone || undefined,
-                role: (u.role || 'student') as any,
-                college: u.college || SBIT_COLLEGE_NAME,
-                department: u.department || undefined,
-                designation: u.designation || undefined,
-                assignedBranch: u.assigned_branch || undefined,
-                assignedSections: u.assigned_sections || [],
-                hallTicketNo: u.hall_ticket_no || undefined,
-                branch: u.branch || undefined,
-                section: u.section || undefined,
-                year: u.year ? String(u.year) : undefined,
-                semester: u.semester ? String(u.semester) : undefined,
-                faceDescriptor: u.face_descriptor || undefined,
-                faceEnrollmentStatus: u.face_enrollment_status || 'pending',
-                status: u.status || 'approved',
-                createdAt: u.created_at || new Date().toISOString()
-              }));
+    const endpoints = [
+      '/api/auth/users',
+      'http://localhost:5000/api/auth/users',
+      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/users`
+    ].filter(Boolean);
 
-              setUsers(prev => {
-                const map = new Map<string, UserProfile>();
-                prev.forEach(u => map.set(u.email.toLowerCase(), u));
-                mapped.forEach(u => map.set(u.email.toLowerCase(), u));
-                return Array.from(map.values());
-              });
-              break;
-            }
+    for (const ep of endpoints) {
+      try {
+        const res = await fetch(ep, {
+          headers: {
+            'Authorization': `Bearer ${token}`
           }
-        } catch (e) {
-          // Try next endpoint
-        }
-      }
-    };
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && Array.isArray(data.users)) {
+            const mapped: UserProfile[] = data.users.map((u: any) => ({
+              uid: u.id,
+              email: u.email,
+              name: u.name,
+              phone: u.phone || undefined,
+              role: (u.role || 'student') as any,
+              college: u.college || SBIT_COLLEGE_NAME,
+              department: u.department || undefined,
+              designation: u.designation || undefined,
+              assignedBranch: u.assigned_branch || undefined,
+              assignedSections: u.assigned_sections || [],
+              hallTicketNo: u.hall_ticket_no || undefined,
+              branch: u.branch || undefined,
+              section: u.section || undefined,
+              year: u.year ? String(u.year) : undefined,
+              semester: u.semester ? String(u.semester) : undefined,
+              faceDescriptor: u.face_descriptor || undefined,
+              faceEnrollmentStatus: u.face_enrollment_status || 'pending',
+              status: u.status || 'approved',
+              createdAt: u.created_at || new Date().toISOString()
+            }));
 
-    fetchUsers();
+            setUsers(mapped);
+            localStorage.setItem("sbit_users", JSON.stringify(mapped));
+            break;
+          }
+        }
+      } catch (e) {
+        // Try next endpoint
+      }
+    }
+  };
+
+  useEffect(() => {
+    refreshUsers();
   }, [currentUser]);
 
   const login = async (
@@ -273,27 +281,6 @@ export const AuthProvider: React.FC<{
     const cleanEmail = email.trim().toLowerCase();
     let lastError: string | null = null;
 
-    // 1. First Tier: Supabase Auth Verification (Authentication Only)
-    if (supabase && password) {
-      try {
-        const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
-          email: cleanEmail,
-          password
-        });
-        if (authErr) {
-          const msg = (authErr.message || '').toLowerCase();
-          if (msg.includes('invalid login credentials') || msg.includes('invalid credentials')) {
-            lastError = 'Invalid email or password.';
-          } else if (!msg.includes('email not confirmed')) {
-            console.warn('Supabase sign-in notice:', authErr.message);
-          }
-        }
-      } catch (supabaseError: any) {
-        console.warn("Supabase auth login notice:", supabaseError?.message);
-      }
-    }
-
-    // 2. Second Tier: FastAPI Backend Auth API (/api/auth/login)
     const backendEndpoints = [
       '/api/auth/login',
       'http://localhost:5000/api/auth/login',
@@ -344,55 +331,43 @@ export const AuthProvider: React.FC<{
     throw new Error("Unable to authenticate. Please verify your credentials.");
   };
 
-  const logout = async () => {
-    if (supabase) {
-      try {
-        await supabase.auth.signOut();
-      } catch {
-        // Safe logout
-      }
-    }
+  const logout = () => {
     localStorage.removeItem('sbit_auth_token');
     localStorage.removeItem('sbit_current_user');
+    localStorage.removeItem('sbit_users');
+    localStorage.removeItem('sbit_attendance_records');
+    localStorage.removeItem('sbit_active_session');
     setCurrentUser(null);
+    setUsers([]);
   };
 
   const requestPasswordReset = async (
     email: string
   ): Promise<{ success: boolean; message: string }> => {
     const cleanEmail = email.trim().toLowerCase();
-    const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+    const endpoints = [
+      '/api/auth/request-reset',
+      'http://localhost:5000/api/auth/request-reset',
+      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/request-reset`
+    ].filter(Boolean);
 
-    try {
-      const response = await fetch(`${apiBase}/auth/request-reset`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: cleanEmail })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        return {
-          success: true,
-          message: data.message || "Verification code sent to your email."
-        };
-      }
-    } catch (err) {
-      console.warn("Backend request-reset notice:", err);
-    }
-
-    if (supabase) {
+    for (const ep of endpoints) {
       try {
-        const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-          redirectTo: `${window.location.origin}/reset-password`
+        const response = await fetch(ep, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: cleanEmail })
         });
-        if (error) throw error;
-        return {
-          success: true,
-          message: "Password reset link sent to your email address."
-        };
-      } catch (err: any) {
-        throw new Error(err.message || "Failed to initiate password reset.");
+
+        if (response.ok) {
+          const data = await response.json();
+          return {
+            success: true,
+            message: data.message || "Verification code sent to your email."
+          };
+        }
+      } catch (err) {
+        console.warn(`Backend request-reset ${ep} notice:`, err);
       }
     }
 
@@ -405,31 +380,41 @@ export const AuthProvider: React.FC<{
     newPassword: string
   ): Promise<{ success: boolean; message: string }> => {
     const cleanEmail = email.trim().toLowerCase();
-    const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+    const endpoints = [
+      '/api/auth/reset-password',
+      'http://localhost:5000/api/auth/reset-password',
+      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/reset-password`
+    ].filter(Boolean);
 
-    try {
-      const response = await fetch(`${apiBase}/auth/reset-password`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: cleanEmail,
-          otp,
-          new_password: newPassword
-        })
-      });
+    for (const ep of endpoints) {
+      try {
+        const response = await fetch(ep, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: cleanEmail,
+            otp,
+            new_password: newPassword
+          })
+        });
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to reset password.");
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.detail || "Failed to reset password.");
+        }
+
+        return {
+          success: true,
+          message: data.message || "Password successfully updated!"
+        };
+      } catch (err: any) {
+        if (err.message && !err.message.includes('Failed to fetch')) {
+          throw err;
+        }
       }
-
-      return {
-        success: true,
-        message: data.message || "Password successfully updated!"
-      };
-    } catch (err: any) {
-      throw new Error(err.message || "Failed to update password.");
     }
+
+    throw new Error("Unable to reach authentication server. Please try again.");
   };
 
   const registerAdmin = async (
@@ -440,53 +425,85 @@ export const AuthProvider: React.FC<{
     password?: string
   ): Promise<UserProfile> => {
     const cleanEmail = data.email.toLowerCase().trim();
-    let uid: string = crypto.randomUUID();
+    if (!password || password.trim().length < 4) {
+      throw new Error("Password must be at least 4 characters long.");
+    }
 
-    if (supabase && password) {
+    const token = localStorage.getItem('sbit_auth_token');
+    const endpoints = [
+      '/api/auth/register',
+      'http://localhost:5000/api/auth/register',
+      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/register`
+    ].filter(Boolean);
+
+    let registeredUser: UserProfile | null = null;
+    let lastError = "Unable to connect to registration server.";
+
+    for (const ep of endpoints) {
       try {
-        const { data: authData } = await supabase.auth.signUp({
-          email: cleanEmail,
-          password,
-          options: { data: { name: data.name, role: 'admin' } }
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json'
+        };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        const res = await fetch(ep, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            email: cleanEmail,
+            password: password,
+            name: data.name.trim(),
+            phone: data.phone || null,
+            role: 'admin',
+            college: data.college || SBIT_COLLEGE_NAME,
+            designation: data.designation || 'System Administrator',
+            department: data.department || null,
+            status: 'approved'
+          })
         });
-        if (authData?.user) uid = authData.user.id;
-      } catch (err) {
-        console.warn("Supabase auth signUp notice:", err);
+
+        if (res.ok) {
+          const resData = await res.json();
+          const serverUser = resData.user || {};
+          registeredUser = {
+            ...data,
+            uid: serverUser.id || crypto.randomUUID(),
+            email: serverUser.email || cleanEmail,
+            name: serverUser.name || data.name.trim(),
+            role: 'admin',
+            college: serverUser.college || data.college || SBIT_COLLEGE_NAME,
+            designation: serverUser.designation || data.designation || 'System Administrator',
+            status: 'approved',
+            createdAt: serverUser.createdAt || new Date().toISOString()
+          };
+          break;
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          const errMsg = errData.detail || `Server error (${res.status})`;
+          if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 409) {
+            throw new Error(errMsg);
+          }
+          lastError = errMsg;
+        }
+      } catch (err: any) {
+        if (err.message && (
+          err.message.includes('Administrator') ||
+          err.message.includes('Password') ||
+          err.message.includes('already exists') ||
+          err.message.includes('Server error')
+        )) {
+          throw err;
+        }
+        lastError = err.message || lastError;
       }
     }
 
-    const newAdmin: UserProfile = {
-      ...data,
-      uid,
-      email: cleanEmail,
-      role: "admin",
-      college: SBIT_COLLEGE_NAME,
-      status: "approved",
-      createdAt: new Date().toISOString(),
-    };
-
-    try {
-      await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: cleanEmail,
-          name: data.name.trim(),
-          phone: data.phone || null,
-          role: 'admin',
-          college: data.college || SBIT_COLLEGE_NAME,
-          designation: data.designation || 'Administrator',
-          department: data.department || null,
-          status: 'approved'
-        })
-      });
-    } catch (err) {
-      console.warn("Backend register admin notice:", err);
+    if (!registeredUser) {
+      throw new Error(lastError);
     }
 
-    setUsers(prev => [newAdmin, ...prev.filter(u => u.email.toLowerCase() !== cleanEmail)]);
-    setCurrentUser(newAdmin);
-    return newAdmin;
+    await refreshUsers();
+    return registeredUser;
   };
 
   const registerFaculty = async (
@@ -497,55 +514,88 @@ export const AuthProvider: React.FC<{
     password?: string
   ): Promise<UserProfile> => {
     const cleanEmail = data.email.toLowerCase().trim();
-    let uid: string = crypto.randomUUID();
+    if (!password || password.trim().length < 4) {
+      throw new Error("Password must be at least 4 characters long.");
+    }
 
-    if (supabase && password) {
+    const token = localStorage.getItem('sbit_auth_token');
+    const endpoints = [
+      '/api/auth/register',
+      'http://localhost:5000/api/auth/register',
+      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/register`
+    ].filter(Boolean);
+
+    let registeredUser: UserProfile | null = null;
+    let lastError = "Unable to connect to registration server.";
+
+    for (const ep of endpoints) {
       try {
-        const { data: authData } = await supabase.auth.signUp({
-          email: cleanEmail,
-          password,
-          options: { data: { name: data.name, role: 'faculty' } }
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json'
+        };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        const res = await fetch(ep, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            email: cleanEmail,
+            password: password,
+            name: data.name.trim(),
+            phone: data.phone || null,
+            role: 'faculty',
+            college: data.college || SBIT_COLLEGE_NAME,
+            designation: data.designation || 'Assistant Professor',
+            department: data.department || 'Computer Science & Engineering',
+            assigned_branch: data.assignedBranch || 'CSE',
+            assigned_sections: data.assignedSections || ['A', 'B'],
+            status: 'approved'
+          })
         });
-        if (authData?.user) uid = authData.user.id;
-      } catch (err) {
-        console.warn("Supabase auth faculty signUp notice:", err);
+
+        if (res.ok) {
+          const resData = await res.json();
+          const serverUser = resData.user || {};
+          registeredUser = {
+            ...data,
+            uid: serverUser.id || crypto.randomUUID(),
+            email: serverUser.email || cleanEmail,
+            name: serverUser.name || data.name.trim(),
+            role: 'faculty',
+            college: serverUser.college || data.college || SBIT_COLLEGE_NAME,
+            designation: serverUser.designation || data.designation || 'Assistant Professor',
+            department: serverUser.department || data.department || 'Computer Science & Engineering',
+            status: 'approved',
+            createdAt: serverUser.createdAt || new Date().toISOString()
+          };
+          break;
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          const errMsg = errData.detail || `Server error (${res.status})`;
+          if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 409) {
+            throw new Error(errMsg);
+          }
+          lastError = errMsg;
+        }
+      } catch (err: any) {
+        if (err.message && (
+          err.message.includes('Administrator') ||
+          err.message.includes('Password') ||
+          err.message.includes('already exists') ||
+          err.message.includes('Server error')
+        )) {
+          throw err;
+        }
+        lastError = err.message || lastError;
       }
     }
 
-    const newFaculty: UserProfile = {
-      ...data,
-      uid,
-      email: cleanEmail,
-      role: "faculty",
-      college: SBIT_COLLEGE_NAME,
-      status: "approved",
-      createdAt: new Date().toISOString(),
-    };
-
-    try {
-      await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: cleanEmail,
-          name: data.name.trim(),
-          phone: data.phone || null,
-          role: 'faculty',
-          college: data.college || SBIT_COLLEGE_NAME,
-          designation: data.designation || 'Faculty Member',
-          department: data.department || 'Computer Science & Engineering',
-          assigned_branch: data.assignedBranch || 'CSE',
-          assigned_sections: data.assignedSections || ['A', 'B'],
-          status: 'approved'
-        })
-      });
-    } catch (err) {
-      console.warn("Backend register faculty notice:", err);
+    if (!registeredUser) {
+      throw new Error(lastError);
     }
 
-    setUsers(prev => [newFaculty, ...prev.filter(u => u.email.toLowerCase() !== cleanEmail)]);
-    setCurrentUser(newFaculty);
-    return newFaculty;
+    await refreshUsers();
+    return registeredUser;
   };
 
   const registerStudent = async (
@@ -634,10 +684,14 @@ export const AuthProvider: React.FC<{
       biometricEnrollmentStatus: "pending",
     };
 
+    const token = localStorage.getItem('sbit_auth_token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     try {
       await fetch('/api/auth/register', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           email: cleanEmail,
           name: data.name.trim(),
@@ -724,9 +778,13 @@ export const AuthProvider: React.FC<{
 
     if (newStudentsToAdd.length > 0) {
       try {
+        const token = localStorage.getItem('sbit_auth_token');
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
         await fetch('/api/auth/users/bulk', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             students: newStudentsToAdd.map(s => ({
               email: s.email,
@@ -750,6 +808,122 @@ export const AuthProvider: React.FC<{
 
     return {
       addedCount: newStudentsToAdd.length,
+      duplicateCount,
+      errors
+    };
+  };
+
+  const bulkInsertFaculty = async (
+    facultyList: Array<{
+      name: string;
+      email: string;
+      password?: string;
+      phone?: string;
+      department?: string;
+      designation?: string;
+      assignedBranch?: string;
+      assignedSections?: string[];
+      status?: 'approved' | 'pending';
+    }>
+  ): Promise<{ addedCount: number; duplicateCount: number; errors: string[] }> => {
+    const errors: string[] = [];
+    const newFacultyToAdd: UserProfile[] = [];
+    const existingEmails = new Set(users.map(u => u.email?.toLowerCase()).filter(Boolean));
+    let duplicateCount = 0;
+
+    facultyList.forEach((f, idx) => {
+      const rowNum = idx + 1;
+      const name = f.name?.trim();
+      const email = f.email?.trim().toLowerCase();
+
+      if (!name || !email) {
+        errors.push(`Row ${rowNum}: Name and Email are required.`);
+        return;
+      }
+
+      if (existingEmails.has(email)) {
+        duplicateCount++;
+        return;
+      }
+
+      existingEmails.add(email);
+
+      newFacultyToAdd.push({
+        uid: crypto.randomUUID(),
+        name: name,
+        email: email,
+        phone: f.phone || '',
+        department: f.department || 'Computer Science & Engineering',
+        designation: f.designation || 'Assistant Professor',
+        assignedBranch: f.assignedBranch || 'CSE',
+        assignedSections: f.assignedSections || ['A', 'B'],
+        role: "faculty",
+        college: SBIT_COLLEGE_NAME,
+        status: f.status || "approved",
+        createdAt: new Date().toISOString(),
+      });
+    });
+
+    if (newFacultyToAdd.length > 0) {
+      const token = localStorage.getItem('sbit_auth_token');
+      const endpoints = [
+        '/api/auth/faculty/bulk',
+        'http://localhost:5000/api/auth/faculty/bulk',
+        `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/faculty/bulk`
+      ].filter(Boolean);
+
+      let saved = false;
+      let lastError = 'Failed to bulk import faculty records.';
+
+      for (const ep of endpoints) {
+        try {
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+
+          const res = await fetch(ep, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              faculty: newFacultyToAdd.map(f => ({
+                name: f.name,
+                email: f.email,
+                phone: f.phone || null,
+                department: f.department,
+                designation: f.designation,
+                assigned_branch: f.assignedBranch,
+                assigned_sections: f.assignedSections,
+                status: f.status
+              }))
+            })
+          });
+
+          if (res.ok) {
+            saved = true;
+            break;
+          } else {
+            const errJson = await res.json().catch(() => ({}));
+            lastError = errJson.detail || `Server error (${res.status})`;
+            if (res.status === 400 || res.status === 401 || res.status === 403) {
+              throw new Error(lastError);
+            }
+          }
+        } catch (e: any) {
+          if (e.message && (e.message.includes('Only') || e.message.includes('Administrator') || e.message.includes('Server error'))) {
+            throw e;
+          }
+          lastError = e.message || lastError;
+        }
+      }
+
+      if (!saved) {
+        throw new Error(lastError);
+      }
+
+      await refreshUsers();
+    }
+
+    return {
+      addedCount: newFacultyToAdd.length,
       duplicateCount,
       errors
     };
@@ -783,49 +957,121 @@ export const AuthProvider: React.FC<{
     uid: string,
     updates: Partial<UserProfile>
   ) => {
-    try {
-      await fetch(`/api/auth/users/${uid}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates)
-      });
-    } catch (err) {
-      console.warn("Backend updateUser notice:", err);
+    const token = localStorage.getItem('sbit_auth_token');
+    const endpoints = [
+      `/api/auth/users/${encodeURIComponent(uid)}`,
+      `http://localhost:5000/api/auth/users/${encodeURIComponent(uid)}`,
+      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/users/${encodeURIComponent(uid)}`
+    ].filter(Boolean);
+
+    let updated = false;
+    let lastError = 'Failed to update user profile.';
+
+    for (const ep of endpoints) {
+      try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        const res = await fetch(ep, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({
+            name: updates.name,
+            phone: updates.phone,
+            role: updates.role,
+            status: updates.status,
+            designation: updates.designation,
+            department: updates.department,
+            assigned_branch: updates.assignedBranch,
+            assigned_sections: updates.assignedSections,
+            hall_ticket_no: updates.hallTicketNo,
+            branch: updates.branch,
+            section: updates.section,
+            year: updates.year,
+            semester: updates.semester,
+            college: updates.college
+          })
+        });
+
+        if (res.ok) {
+          updated = true;
+          break;
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          lastError = errData.detail || `Server error (${res.status})`;
+          if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 404) {
+            throw new Error(lastError);
+          }
+        }
+      } catch (err: any) {
+        if (err.message && (err.message.includes('Access denied') || err.message.includes('User') || err.message.includes('Server error'))) {
+          throw err;
+        }
+        lastError = err.message || lastError;
+      }
     }
 
-    setUsers(prev =>
-      prev.map(user =>
-        user.uid === uid
-          ? {
-              ...user,
-              ...updates,
-              updatedAt: new Date().toISOString(),
-            }
-          : user
-      )
-    );
-
-    if (currentUser && currentUser.uid === uid) {
-      setCurrentUser({
-        ...currentUser,
-        ...updates,
-      });
+    if (!updated) {
+      throw new Error(lastError);
     }
+
+    await refreshUsers();
   };
 
-  const deleteUser = async (uid: string) => {
-    try {
-      await fetch(`/api/auth/users/${uid}`, {
-        method: 'DELETE'
-      });
-    } catch (err) {
-      console.warn("Backend deleteUser notice:", err);
+  const deleteUser = async (uid: string): Promise<void> => {
+    const token = localStorage.getItem('sbit_auth_token');
+    const endpoints = [
+      `/api/auth/users/${encodeURIComponent(uid)}`,
+      `http://localhost:5000/api/auth/users/${encodeURIComponent(uid)}`,
+      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/users/${encodeURIComponent(uid)}`
+    ].filter(Boolean);
+
+    let deleted = false;
+    let lastError = "Failed to delete user.";
+
+    for (const ep of endpoints) {
+      try {
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        const res = await fetch(ep, {
+          method: 'DELETE',
+          headers
+        });
+
+        if (res.ok) {
+          deleted = true;
+          break;
+        } else {
+          const data = await res.json().catch(() => ({}));
+          lastError = data.detail || (res.status === 502 ? "Server gateway unreachable. Please retry in a few seconds." : `Server error (${res.status})`);
+          if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 404) {
+            throw new Error(lastError);
+          }
+        }
+      } catch (err: any) {
+        if (err.message && (
+          err.message.includes('Cannot delete') ||
+          err.message.includes('Access denied') ||
+          err.message.includes('User') ||
+          err.message.includes('Server')
+        )) {
+          throw err;
+        }
+        lastError = err.message || lastError;
+      }
     }
 
-    setUsers(prev => prev.filter(user => user.uid !== uid));
+    if (!deleted) {
+      throw new Error(lastError);
+    }
 
-    if (currentUser && currentUser.uid === uid) {
-      setCurrentUser(null);
+    setUsers(prev => prev.filter(user => user.uid !== uid && user.email.toLowerCase() !== uid.toLowerCase()));
+
+    if (currentUser && (currentUser.uid === uid || currentUser.email.toLowerCase() === uid.toLowerCase())) {
+      logout();
+    } else {
+      await refreshUsers();
     }
   };
 
@@ -1091,8 +1337,12 @@ export const AuthProvider: React.FC<{
     }
   };
 
-  const pendingStudents = users.filter(
-    user => user.role === "student" && user.status === "pending"
+  const pendingStudents = useMemo(
+    () =>
+      users.filter(
+        user => user.role === "student" && user.status === "pending"
+      ),
+    [users]
   );
 
   const approvedStudents = users.filter(
@@ -1113,9 +1363,11 @@ export const AuthProvider: React.FC<{
         registerStudent,
         insertStudent,
         bulkInsertStudents,
+        bulkInsertFaculty,
         updateStudentStatus,
         updateUser,
         deleteUser,
+        refreshUsers,
         enrollStudentFace,
         revokeStudentFace,
         enrollStudentBiometrics,

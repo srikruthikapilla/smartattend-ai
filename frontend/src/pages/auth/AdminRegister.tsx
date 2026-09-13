@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { SBIT_COLLEGE_NAME } from '../../utils/seedData';
-import { Shield, ArrowRight, User, Mail, Phone, Lock, Building } from 'lucide-react';
+import { Shield, ArrowRight, User, Mail, Phone, Lock, Building, AlertCircle } from 'lucide-react';
 
 export const AdminRegister: React.FC = () => {
   const { registerAdmin } = useAuth();
@@ -13,17 +13,28 @@ export const AdminRegister: React.FC = () => {
   const [phone, setPhone] = useState('');
   const [designation, setDesignation] = useState('Director / Principal');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await registerAdmin({
-      name,
-      email,
-      phone,
-      college: SBIT_COLLEGE_NAME,
-      designation
-    });
-    navigate('/admin/dashboard');
+    setError(null);
+    setLoading(true);
+
+    try {
+      await registerAdmin({
+        name,
+        email,
+        phone,
+        college: SBIT_COLLEGE_NAME,
+        designation
+      }, password);
+      navigate('/admin/dashboard');
+    } catch (err: any) {
+      setError(err.message || 'Failed to register administrator.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -38,6 +49,13 @@ export const AdminRegister: React.FC = () => {
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Administrator Registration</h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">{SBIT_COLLEGE_NAME}</p>
         </div>
+
+        {error && (
+          <div className="p-3.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-xs flex items-center gap-2.5">
+            <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+            <span className="font-medium">{error}</span>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
           <div>

@@ -133,7 +133,7 @@ export const generateSeedAttendanceRecords = (): AttendanceRecord[] => {
   return records;
 };
 
-export const initialAttendanceRecords: AttendanceRecord[] = generateSeedAttendanceRecords();
+export const initialAttendanceRecords: AttendanceRecord[] = [];
 export const initialAuditLogs: AuditLog[] = [];
 
 

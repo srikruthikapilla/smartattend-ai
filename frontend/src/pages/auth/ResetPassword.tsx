@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { supabase } from '../../config/supabase';
 import {
-  Lock, Eye, EyeOff, ShieldCheck, CheckCircle2,
-  AlertCircle, RefreshCw, ArrowLeft, KeyRound
+  Lock, Eye, EyeOff, CheckCircle2,
+  AlertCircle, RefreshCw, ArrowLeft, KeyRound, Mail
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 export const ResetPasswordPage: React.FC = () => {
   const navigate = useNavigate();
+  const { resetPasswordWithCode } = useAuth();
+  const [email, setEmail] = useState('');
+  const [otp, setOtp] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -20,6 +22,16 @@ export const ResetPasswordPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    if (!email.trim()) {
+      setError('Please enter your institutional email address.');
+      return;
+    }
+
+    if (!otp.trim()) {
+      setError('Please enter the 6-digit verification code.');
+      return;
+    }
 
     if (password.length < 6) {
       setError('Password must be at least 6 characters long.');
@@ -33,21 +45,19 @@ export const ResetPasswordPage: React.FC = () => {
 
     setIsLoading(true);
     try {
-      if (supabase) {
-        const { error: resetErr } = await supabase.auth.updateUser({
-          password
-        });
-        if (resetErr) throw resetErr;
+      const res = await resetPasswordWithCode(email.trim().toLowerCase(), otp.trim(), password);
+      if (res.success) {
+        setSuccess('Your password has been successfully updated! Redirecting to sign in...');
+        confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+
+        setTimeout(() => {
+          navigate('/login');
+        }, 2000);
+      } else {
+        setError(res.message || 'Failed to update password.');
       }
-
-      setSuccess('Your password has been successfully updated! Redirecting to sign in...');
-      confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
-
-      setTimeout(() => {
-        navigate('/login');
-      }, 2000);
     } catch (err: any) {
-      setError(err.message || 'Failed to update password. Your recovery link may have expired.');
+      setError(err.message || 'Failed to update password. Please verify your OTP code.');
     } finally {
       setIsLoading(false);
     }
@@ -63,10 +73,10 @@ export const ResetPasswordPage: React.FC = () => {
             <KeyRound className="w-6 h-6" />
           </div>
           <h2 className="text-2xl font-bold font-heading text-slate-900 dark:text-white tracking-tight">
-            Create New Password
+            Reset Account Password
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Please enter and confirm your new institutional account password.
+            Enter your institutional email, 6-digit verification code, and new password.
           </p>
         </div>
 
@@ -85,6 +95,36 @@ export const ResetPasswordPage: React.FC = () => {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4 text-left">
+          <div>
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1 font-heading">
+              Email Address
+            </label>
+            <div className="relative">
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="e.g. user@sbit.ac.in"
+                required
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1 font-heading">
+              6-Digit Verification Code (OTP)
+            </label>
+            <input
+              type="text"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              placeholder="Enter 6-digit code"
+              required
+              maxLength={6}
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm tracking-widest text-center font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+            />
+          </div>
           
           <div>
             <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1 font-heading">

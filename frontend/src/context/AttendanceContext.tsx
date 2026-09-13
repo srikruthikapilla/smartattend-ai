@@ -116,24 +116,7 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return null;
   });
 
-  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(() => {
-    const saved = localStorage.getItem("sbit_attendance_records");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const filtered = parsed.filter((r: AttendanceRecord) =>
-            !['att_1', 'att_2', 'att_3'].includes(r.recordId) &&
-            !['student_301', 'student_302', 'student_303', 'student_304', 'student_305'].includes(r.studentId)
-          );
-          if (filtered.length > 0) return filtered;
-        }
-      } catch {
-        return initialAttendanceRecords;
-      }
-    }
-    return initialAttendanceRecords;
-  });
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
 
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(initialAuditLogs);
   const [geofence, setGeofence] = useState<GeofenceConfig>({
@@ -170,7 +153,11 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
       // 1. Fetch from Backend Reverse Proxy /api/attendance/records
       try {
-        const res = await fetch('/api/attendance/records');
+        const token = localStorage.getItem('sbit_auth_token');
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        const res = await fetch('/api/attendance/records', { headers });
         if (res.ok) {
           const data = await res.json();
           if (data && data.records) {
@@ -197,12 +184,9 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               markedBy: r.marked_by
             }));
 
-            setAttendanceRecords(prev => {
-              const map = new Map<string, AttendanceRecord>();
-              prev.forEach(item => map.set(item.recordId, item));
-              mapped.forEach(item => map.set(item.recordId, item));
-              return Array.from(map.values()).sort((a, b) => new Date(b.markedAt).getTime() - new Date(a.markedAt).getTime());
-            });
+            setAttendanceRecords(
+              mapped.sort((a, b) => new Date(b.markedAt).getTime() - new Date(a.markedAt).getTime())
+            );
             recordsLoaded = true;
           }
         }
@@ -712,9 +696,13 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     // 2. Persist to Backend API /api/attendance/toggle
     try {
+      const token = localStorage.getItem('sbit_auth_token');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
       await fetch('/api/attendance/toggle', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           studentId,
           hallTicketNo: studentInfo.hallTicketNo,
@@ -768,9 +756,13 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
 
     try {
+      const token = localStorage.getItem('sbit_auth_token');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
       await fetch('/api/attendance/bulk', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           students,
           status
@@ -784,7 +776,11 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const refreshLiveAttendance = async () => {
     let loaded = false;
     try {
-      const res = await fetch('/api/attendance/records');
+      const token = localStorage.getItem('sbit_auth_token');
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch('/api/attendance/records', { headers });
       if (res.ok) {
         const data = await res.json();
         if (data && data.records) {

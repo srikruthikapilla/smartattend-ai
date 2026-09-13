@@ -1,54 +1,28 @@
 # 🗄️ Smart Attend - Database Schema Directory
 
-This folder contains separate, production-ready database schemas for both **Supabase** and **Standalone PostgreSQL**:
+This directory contains the production-ready schema for **PostgreSQL**.
 
 ---
 
-## 📁 Available Schema Files
+## 📁 Schema File
 
 | Schema File | Target Database | Description |
 | :--- | :--- | :--- |
-| **[`supabase_schema.sql`](file:///d:/Projects/smartattend-ai/backend/db/supabase_schema.sql)** | **Supabase (Cloud / Self-Hosted)** | Includes Supabase RLS policies, Realtime publication channels, Supabase Auth integration, and triggers. |
-| **[`postgresql_schema.sql`](file:///d:/Projects/smartattend-ai/backend/db/postgresql_schema.sql)** | **Standalone PostgreSQL / Docker / RDS** | Standard relational PostgreSQL schema with `password_hash`, UUID generators, indices, and timestamp triggers. |
-| **[`schema.sql`](file:///d:/Projects/smartattend-ai/backend/db/schema.sql)** | **Master Reference** | Comprehensive unified schema reference. |
+| **[`postgresql_schema.sql`](postgresql_schema.sql)** | **PostgreSQL (Docker / Local / Cloud)** | Defines separate tables for `admins`, `faculty`, and `students`, along with `sessions`, `attendance_records`, `geofence_config`, `audit_logs`, and `revoked_tokens`. |
 
 ---
 
 ## 🚀 How to Run
 
-### Option 1: Running in Supabase Dashboard (Recommended)
-1. Open your **Supabase Project Dashboard** (`https://supabase.com/dashboard/project/<your-project-id>`).
-2. Navigate to **SQL Editor** from the left sidebar.
-3. Open [`supabase_schema.sql`](file:///d:/Projects/smartattend-ai/backend/db/supabase_schema.sql), copy the entire SQL script, and paste it into the editor.
-4. Click **Run**.
-5. To insert your initial admin user without constraint errors:
-   ```sql
-   INSERT INTO public.users (
-       email,
-       role,
-       name,
-       status,
-       college
-   ) VALUES (
-       'yourname@sbit.ac.in',
-       'admin',
-       'Administrator',
-       'approved',
-       'Swarna Bharathi Institute of Science and Technology (SBIT)'
-   )
-   ON CONFLICT (email) DO UPDATE 
-   SET role = 'admin', status = 'approved';
-   ```
+### Automatic Initialization (Docker Compose)
+`docker-compose.yml` mounts `postgresql_schema.sql` into `/docker-entrypoint-initdb.d/01_schema.sql`, which automatically executes when the container is initialized for the first time.
 
----
-
-### Option 2: Running in Standalone PostgreSQL / Docker
-Using `psql`:
+### Manual Execution via `psql`
 ```bash
 psql -h localhost -U postgres -d smartattend -f backend/db/postgresql_schema.sql
 ```
 
-Using Docker Compose:
+### Manual Execution via Docker Container
 ```bash
 docker exec -i smartattend-postgres psql -U postgres -d smartattend < backend/db/postgresql_schema.sql
 ```

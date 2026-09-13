@@ -1,34 +1,28 @@
 """
 Smart Attend — Database Module
 ================================
-PostgreSQL is the EXCLUSIVE database engine for all data storage.
-Supabase is used ONLY for Authentication (Supabase Auth API).
+PostgreSQL is the exclusive database engine for all data storage and authentication.
 
 This module provides:
   - SQLAlchemy engine & session factory for PostgreSQL
   - get_db() FastAPI dependency for route injection
-  - get_db_context() context manager for non-route code (startup, sockets)
-  - init_db() to create tables & seed default geofence on startup
-  - supabase_auth: Supabase client used ONLY for Auth operations
+  - get_db_context() context manager for non-route code (startup, sockets, seeders)
+  - init_db() to verify connectivity, create tables & seed default geofence on startup
 """
 
 import logging
 from contextlib import contextmanager
-from typing import Optional, Generator
+from typing import Generator
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 
-from app.config import (
-    DATABASE_URL,
-    SUPABASE_URL,
-    SUPABASE_SERVICE_ROLE_KEY,
-)
+from app.config import DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# 1. PostgreSQL Engine & Session (PRIMARY DATABASE)
+# PostgreSQL Engine & Session
 # ---------------------------------------------------------------------------
 
 # Normalize postgres:// to postgresql:// for SQLAlchemy 2.0
@@ -58,7 +52,7 @@ def get_db() -> Generator[Session, None, None]:
 
 @contextmanager
 def get_db_context() -> Generator[Session, None, None]:
-    """Context manager for non-route code (startup hooks, socket handlers)."""
+    """Context manager for non-route code (startup hooks, socket handlers, seeders)."""
     db = SessionLocal()
     try:
         yield db
@@ -99,25 +93,3 @@ def init_db() -> None:
         logger.info(f"PostgreSQL connection verified: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL}")
     except Exception as e:
         logger.error(f"PostgreSQL connection failed: {e}")
-
-
-# ---------------------------------------------------------------------------
-# 2. Supabase Auth Client (AUTHENTICATION ONLY — no table queries)
-# ---------------------------------------------------------------------------
-
-supabase_auth = None  # type: ignore
-
-if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
-    try:
-        from supabase import create_client, Client
-        supabase_auth: Optional[Client] = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-        logger.info("Supabase Auth client connected (auth-only mode).")
-    except Exception as e:
-        logger.warning(f"Supabase Auth client init notice: {e}")
-        supabase_auth = None
-
-# ---------------------------------------------------------------------------
-# LEGACY ALIAS — kept temporarily so imports in dependencies/auth.py still
-# resolve during the migration.  Will point to supabase_auth (auth-only).
-# ---------------------------------------------------------------------------
-supabase_client = supabase_auth

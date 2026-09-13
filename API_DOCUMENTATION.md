@@ -29,7 +29,7 @@
 
 ## 1. System Architecture & Overview
 
-SmartAttend AI is built on **FastAPI (Python 3.10+)** with native vectorized **NumPy** face matching, PostgreSQL/Supabase data persistence, and **Socket.io** for real-time live attendance streaming.
+SmartAttend AI is built on **FastAPI (Python 3.11+)** with native vectorized **NumPy** face matching, PostgreSQL data persistence with separate tables (`admins`, `faculty`, `students`), Redis 7 for OTP management, and **Socket.io** for real-time live attendance streaming.
 
 ```
 ┌────────────────────────────────────────────────────────┐
@@ -41,8 +41,8 @@ SmartAttend AI is built on **FastAPI (Python 3.10+)** with native vectorized **N
 └───────┬───────┴───────────┬────────────┴───────┬───────┘
         │                   │                    │
 ┌───────▼───────────────────▼────────────────────▼───────┐
-│              PostgreSQL / Supabase Database             │
-│ (users, attendance_records, sessions, capture_logs)    │
+│              PostgreSQL 16 & Redis 7                   │
+│ (admins, faculty, students, records, sessions, redis)  │
 └────────────────────────────────────────────────────────┘
 ```
 
