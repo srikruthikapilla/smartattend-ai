@@ -360,9 +360,9 @@ docker run -d -p 3000:80 smartattend-frontend
 
 ---
 
-### 5. Production Deployment (Coolify)
+### 5. Production Deployment (Coolify / Docker)
 
-Smart Attend is optimized for 1-click deployment on **Coolify**.
+Smart Attend is optimized for 1-click deployment on **Coolify** or any standard Docker VPS.
 
 1. Connect your GitHub repository to Coolify.
 2. Select **Docker Compose** as the build pack.
@@ -370,24 +370,24 @@ Smart Attend is optimized for 1-click deployment on **Coolify**.
 
    ```env
    NODE_ENV=production
-   POSTGRES_PASSWORD=<your-secure-db-password>
-   JWT_SECRET=<your-secure-jwt-secret>
-   EDGE_API_KEY=<your-secure-edge-key>
+   POSTGRES_PASSWORD=<generate: openssl rand -hex 32>
+   JWT_SECRET=<generate: python -c "import secrets; print(secrets.token_hex(32))">
+   EDGE_API_KEY=<generate: python -c "import secrets; print(secrets.token_urlsafe(32))">
    ADMIN_EMAIL=admin@sbit.ac.in
-   ADMIN_PASSWORD=<your-secure-admin-password>
+   ADMIN_PASSWORD=<your-secure-admin-password, min 8 chars>
    ```
 
-   *Note: If `NODE_ENV=production` is set, the backend will refuse to start if `JWT_SECRET` or `EDGE_API_KEY` are left as their insecure defaults.*
+   *Note: When `NODE_ENV=production`, the backend enforces strict startup guards and will raise a `RuntimeError` if default database passwords (`postgrespassword`, `localdevpassword123`), default `JWT_SECRET`, or default `EDGE_API_KEY` are detected.*
 
-4. Click **Deploy**. Coolify will automatically provision the Nginx reverse proxy, provision SSL certificates, and route traffic to the frontend container on port `80`.
+4. Click **Deploy**. Coolify provisions SSL certificates, runs the PostgreSQL and Redis containers internally, and routes traffic through Nginx on port `80`/`443`.
 
 ---
 
-### 5. Database Setup & Seeding
+### 6. Database Setup & Seeding
 
 The database schema initializes automatically on first Docker launch via [`backend/db/postgresql_schema.sql`](file:///d:/Projects/smartattend-ai/backend/db/postgresql_schema.sql).
 
-If no administrators exist in the database, the system will **automatically bootstrap an initial admin account** using the `ADMIN_EMAIL` and `ADMIN_PASSWORD` environment variables on startup.
+If no administrators exist in the database, the system will **automatically bootstrap an initial admin account** using the `ADMIN_EMAIL` and `ADMIN_PASSWORD` environment variables on startup. Additional faculty and students can be enrolled through the admin dashboard or via Excel bulk upload.
 
 ---
 
@@ -396,61 +396,65 @@ If no administrators exist in the database, the system will **automatically boot
 | Threat / Attack Vector | Defense Mechanism | Implementation Detail |
 | :--- | :--- | :--- |
 | **Photo / Display Screen Spoofing** | **Active Eye Blink Liveness** | Computes continuous Eye Aspect Ratio (EAR) across facial landmarks. Rejects static photos. |
-| **Off-Campus Remote Proxy** | **GPS Geofencing** | Enforces Euclidean Haversine distance from campus centroid ($\le 150\text{m}$). |
-| **QR Screenshot Relaying** | **Rotating Ephemeral Tokens** | QR tokens cycle dynamically every 30 seconds with cryptographic timestamps. |
-| **Duplicate Attendance Claims** | **Unique SQL Constraint** | PostgreSQL composite unique index on `(session_id, hall_ticket_no)`. |
-| **Identity Impersonation** | **Fail-Closed Biometrics** | Unmatched facial vectors or distance $> 0.44$ immediately fail closed with HTTP 400. |
-| **Unauthorized Role Escalation** | **Separate Table RBAC** | `admins`, `faculty`, and `students` reside in dedicated tables; tokens verify role claims on every request. |
+| **Off-Campus Remote Proxy** | **GPS Geofencing** | Enforces Euclidean Haversine distance from campus centroid ($\le 150\text{m}$). Fail-closed on missing or spoofed coordinates. |
+| **QR Screenshot Relaying** | **Rotating Ephemeral Tokens** | Dynamic classroom QR tokens cycle periodically with cryptographic signatures and expiration. |
+| **Attendance History Wipe** | **Session-Scoped Deletes** | All manual overrides, toggles, bulk actions, and kiosk captures delete existing records scoped strictly to `(session_id, hall_ticket_no)`. |
+| **Biometric Descriptor Leakage** | **Zero-Vector Public Exposure** | Raw 128-D / 512-D face descriptors are stripped from public responses (`check-status`, `Student.to_dict()`, user queries). |
+| **Brute Force & Flooding** | **SlowAPI Rate Limiting** | Strict rate limits applied to check-in (`5/min`), verification (`10/min`), login (`10/min`), and OTP dispatch (`3/min`). |
+| **Unauthenticated Read Access** | **Strict JWT RBAC** | All roster and history endpoints (`/api/attendance/records`, `/api/admin/geofence`) require verified JWT authentication. |
+| **Cryptographic RNG for OTP** | **Python `secrets` Module** | OTPs are generated using CSPRNG (`secrets.randbelow`) and cached in Redis with a 10-minute TTL. |
+| **Default Credential Usage** | **Production Startup Guards** | Fails closed on boot if default credentials or passwords are used in production environments. |
 
 ---
 
 ## 📡 API Endpoints Reference
 
 ### Authentication & Users (`/api/auth`)
-| Method | Endpoint | Description | Auth |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/api/auth/login` | Authenticate Admin or Faculty member | None |
-| `GET` | `/api/auth/me` | Fetch active user profile from JWT token | Bearer Token |
-| `GET` | `/api/auth/users` | List unified users (admins, faculty, students) | Bearer Token |
-| `POST` | `/api/auth/register-admin` | Register a new administrator | Admin Only |
-| `POST` | `/api/auth/register-faculty` | Register a new faculty member | Admin Only |
-| `POST` | `/api/auth/register-student` | Register a new student | Admin / Kiosk |
-| `POST` | `/api/auth/bulk-students` | Bulk upload students from parsed Excel sheet | Admin Only |
-| `POST` | `/api/auth/bulk-faculty` | Bulk upload faculty members | Admin Only |
-| `PUT` | `/api/auth/users/{user_id}` | Update user details or status | Admin / Self |
-| `DELETE` | `/api/auth/users/{user_id}` | Delete user (prevents deleting last admin) | Admin Only |
-| `POST` | `/api/auth/forgot-password/request-otp` | Request 6-digit OTP via email | None |
-| `POST` | `/api/auth/forgot-password/reset` | Verify OTP and set new password | None |
+| Method | Endpoint | Description | Auth | Rate Limit |
+| :--- | :--- | :--- | :--- | :--- |
+| `POST` | `/api/auth/login` | Authenticate Admin or Faculty member | None | 10/min |
+| `GET` | `/api/auth/me` | Fetch active user profile from JWT token | Bearer Token | — |
+| `GET` | `/api/auth/users` | List unified users (admins, faculty, students) | Bearer Token | — |
+| `POST` | `/api/auth/register-admin` | Register a new administrator | Admin Only | — |
+| `POST` | `/api/auth/register-faculty` | Register a new faculty member | Admin Only | — |
+| `POST` | `/api/auth/register-student` | Register a new student | Admin / Kiosk | — |
+| `POST` | `/api/auth/users/bulk` | Bulk upload students from parsed Excel sheet | Admin Only | — |
+| `POST` | `/api/auth/faculty/bulk` | Bulk upload faculty members | Admin Only | — |
+| `PUT` | `/api/auth/users/{user_id}` | Update user details or status | Admin / Self | — |
+| `DELETE` | `/api/auth/users/{user_id}` | Delete user (prevents deleting last admin) | Admin Only | — |
+| `POST` | `/api/auth/request-reset` | Request 6-digit OTP via email (Brevo / Redis) | None | 3/min |
+| `POST` | `/api/auth/reset-password` | Verify OTP and set new password | None | 10/min |
 
 ### Public Kiosk & Student Check-in (`/api/checkin`)
-| Method | Endpoint | Description | Auth |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/api/student/check-status/{hall_ticket}` | Check if student exists and has biometrics | None |
-| `POST` | `/api/student/register-biometrics` | Enroll 128-D face vector and approve student | None / Kiosk |
-| `POST` | `/api/checkin/verify` | Submit multi-modal checkin (Face + Blink + GPS + QR) | None |
-| `GET` | `/api/student/records/{hall_ticket}` | Student portal attendance lookup | None |
+| Method | Endpoint | Description | Auth | Rate Limit |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/api/checkin/session/{token}` | Validate active classroom QR session (fails closed) | None | — |
+| `GET` | `/api/student/check-status/{hall_ticket}` | Check if student exists & enrolled (no raw descriptors) | None | 10/min |
+| `POST` | `/api/student/register-biometrics` | Enroll 128-D face vector for admin-registered student | None / Kiosk | 10/min |
+| `POST` | `/api/checkin/verify` | Submit multi-modal checkin (Face + Blink + GPS + QR) | None | 5/min |
+| `GET` | `/api/student/records/{hall_ticket}` | Student personal attendance history | None | — |
 
 ### Attendance & Live Rosters (`/api/attendance`)
 | Method | Endpoint | Description | Auth |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/api/attendance/records` | Fetch live attendance records for dashboard | Optional / Bearer |
-| `GET` | `/api/attendance/today` | Fetch today's attendance records | Bearer Token |
+| `GET` | `/api/attendance/records` | Fetch live attendance records for dashboard | Bearer Token |
 | `GET` | `/api/attendance/date/{date}` | Retrieve attendance records for a specific date | Bearer Token |
 | `POST` | `/api/attendance/toggle` | Inline toggle status (Present / Absent / Late) | Faculty / Admin |
 | `POST` | `/api/attendance/bulk` | Bulk mark list of students present or absent | Faculty / Admin |
-| `PATCH`| `/api/attendance/{record_id}/override` | Staff manual attendance override with reason | Faculty / Admin |
+| `POST` | `/api/attendance/mark` | Direct manual override / attendance marking | Faculty / Admin |
+| `POST` | `/api/attendance/capture` | Kiosk / Classroom group face capture | Faculty / Admin |
 
 ### Sessions & Geofence (`/api/admin` & `/api/qr-session`)
-| Method | Endpoint | Description | Auth |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/api/admin/stats` | High-level institutional metrics | Admin Only |
-| `GET` | `/api/admin/geofence` | Retrieve campus geofence coordinates & radius | Public / Staff |
-| `PUT` | `/api/admin/geofence` | Update geofence coordinates and radius | Admin Only |
-| `POST`| `/api/qr-session/start` | Launch dynamic QR broadcasting session | Faculty / Admin |
-| `GET` | `/api/qr-session/current` | Get current active QR session details | None |
-| `POST`| `/api/qr-session/terminate`| Terminate active attendance session | Faculty / Admin |
+| Method | Endpoint | Description | Auth | Rate Limit |
+| :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/api/admin/stats` | High-level institutional metrics | Admin Only | — |
+| `GET` | `/api/admin/geofence` | Retrieve campus geofence coordinates & radius | Bearer Token | — |
+| `PUT` | `/api/admin/geofence` | Update geofence coordinates and radius | Admin Only | — |
+| `POST` | `/api/qr-session/start` | Launch dynamic QR broadcasting session | Faculty / Admin | — |
+| `GET` | `/api/qr-session/current` | Get current active QR session details | None | 10/min |
+| `POST` | `/api/qr-session/terminate`| Terminate active attendance session | Faculty / Admin | — |
 
-Interactive OpenAPI documentation is available at `http://localhost:5000/docs`.
+Interactive OpenAPI documentation is available at `http://localhost:5000/docs` in development mode (disabled automatically in production for security).
 
 ---
 
