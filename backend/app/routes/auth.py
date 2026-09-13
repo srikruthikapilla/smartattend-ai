@@ -7,7 +7,7 @@ Student accounts are passwordless roster records.
 """
 
 import os
-import random
+import secrets
 import time
 import uuid
 import logging
@@ -673,7 +673,7 @@ def request_password_reset(request: Request, payload: RequestResetRequest, db: S
         }
 
     # Generate 6-digit OTP
-    otp_code = f"{random.randint(100000, 999999)}"
+    otp_code = f"{secrets.randbelow(900000) + 100000}"
 
     # Store in Redis with 10-minute (600s) TTL
     set_otp(clean_email, otp_code, ttl_seconds=600)

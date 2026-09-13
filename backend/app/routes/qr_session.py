@@ -8,7 +8,7 @@ import time
 import uuid
 import logging
 import jwt
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
@@ -20,6 +20,7 @@ from app.models.schemas import QRSessionStartPayload
 from app.models.db_models import AttendanceSession
 from app.database import get_db
 from app.dependencies.auth import require_role
+from app.routes.auth import _rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,8 @@ def start_qr_session(
     }
 
 @router.get("/current")
-def get_current_qr_session(db: Session = Depends(get_db)):
+@_rate_limit("10/minute")
+def get_current_qr_session(request: Request, db: Session = Depends(get_db)):
     """
     Faculty dashboard polls this to render the current dynamic QR code.
     Publicly accessible to support classroom display screens.

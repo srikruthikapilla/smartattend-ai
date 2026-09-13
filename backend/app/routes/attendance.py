@@ -26,7 +26,7 @@ from app.models.db_models import (
     AuditLog
 )
 from app.database import get_db, get_db_context
-from app.dependencies.auth import get_current_user, get_optional_current_user, require_role
+from app.dependencies.auth import get_current_user, require_role
 from app.services.face_recognition_service import face_service
 
 logger = logging.getLogger(__name__)
@@ -102,7 +102,7 @@ def get_or_create_valid_session_id(
 
 @router.get("/records")
 def get_all_attendance_records(
-    current_user: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
+    current_user: Dict[str, Any] = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -228,9 +228,10 @@ async def capture_attendance(
 
             # 2. If matched and verified, mark attendance
             if is_matched and ht and status_val == "present":
-                # Clear existing record for this session & hall ticket
+                # Clear only duplicate for this session/date — not full history
                 db.query(AttendanceRecord).filter(
-                    AttendanceRecord.hall_ticket_no == ht
+                    AttendanceRecord.hall_ticket_no == ht,
+                    AttendanceRecord.session_id == session_uuid,
                 ).delete()
 
                 rec = AttendanceRecord(
@@ -243,12 +244,12 @@ async def capture_attendance(
                     section="A",
                     year=3,
                     status="present",
-                    verification_method="face_recognition",
+                    verification_method="classroom_group_scan",
                     face_match_confidence=round(conf / 100.0, 4),
                     face_distance=item.get("distance", 0.1),
-                    blink_verified=True,
-                    biometric_verified=True,
-                    gps_distance_meters=5,
+                    blink_verified=False,
+                    biometric_verified=False,
+                    gps_distance_meters=None,
                     student_lat=payload.lat or 17.2472,
                     student_lng=payload.lng or 80.1514,
                     marked_at=now_dt,
@@ -311,9 +312,10 @@ async def capture_attendance(
                 detail=f"Face matching failed ({conf}% similarity). Live face does not match enrolled profile."
             )
 
-        # Clear existing record for this student
+        # Clear existing record for this student in this session
         db.query(AttendanceRecord).filter(
-            AttendanceRecord.hall_ticket_no == ht
+            AttendanceRecord.hall_ticket_no == ht,
+            AttendanceRecord.session_id == session_uuid,
         ).delete()
 
         rec = AttendanceRecord(
@@ -326,14 +328,14 @@ async def capture_attendance(
             section="A",
             year=3,
             status="present",
-            verification_method="face_recognition",
+            verification_method="kiosk_single_capture",
             face_match_confidence=round(conf / 100.0, 4),
             face_distance=match_res.get("distance", 0.1),
             blink_verified=bool(payload.blinkVerified),
-            biometric_verified=True,
-            gps_distance_meters=5,
-            student_lat=payload.lat or 17.2472,
-            student_lng=payload.lng or 80.1514,
+            biometric_verified=False,
+            gps_distance_meters=None,
+            student_lat=payload.lat,
+            student_lng=payload.lng,
             marked_at=now_dt,
             manual_reason=f"Kiosk WebRTC Scan ({conf}% match)",
             marked_by=performer
@@ -453,7 +455,8 @@ async def toggle_student_attendance(
 
     if target_status == "absent":
         db.query(AttendanceRecord).filter(
-            AttendanceRecord.hall_ticket_no == hall_ticket
+            AttendanceRecord.hall_ticket_no == hall_ticket,
+            AttendanceRecord.session_id == session_uuid,
         ).delete()
         db.commit()
 
@@ -473,9 +476,10 @@ async def toggle_student_attendance(
             "hallTicket": hall_ticket
         }
     else:
-        # Delete existing record
+        # Delete existing record for this session
         db.query(AttendanceRecord).filter(
-            AttendanceRecord.hall_ticket_no == hall_ticket
+            AttendanceRecord.hall_ticket_no == hall_ticket,
+            AttendanceRecord.session_id == session_uuid,
         ).delete()
 
         record = AttendanceRecord(
@@ -491,9 +495,9 @@ async def toggle_student_attendance(
             verification_method="manual",
             face_match_confidence=1.0,
             face_distance=0.0,
-            blink_verified=True,
-            biometric_verified=True,
-            gps_distance_meters=5,
+            blink_verified=False,
+            biometric_verified=False,
+            gps_distance_meters=None,
             student_lat=17.2472,
             student_lng=80.1514,
             marked_at=now_dt,
@@ -548,11 +552,13 @@ async def bulk_mark_attendance(
             continue
         if target_status == "absent":
             db.query(AttendanceRecord).filter(
-                AttendanceRecord.hall_ticket_no == ht
+                AttendanceRecord.hall_ticket_no == ht,
+                AttendanceRecord.session_id == session_uuid,
             ).delete()
         else:
             db.query(AttendanceRecord).filter(
-                AttendanceRecord.hall_ticket_no == ht
+                AttendanceRecord.hall_ticket_no == ht,
+                AttendanceRecord.session_id == session_uuid,
             ).delete()
 
             rec = AttendanceRecord(
@@ -599,10 +605,18 @@ def mark_attendance_direct(
     session_uuid = uuid.UUID(session_id_str) if isinstance(session_id_str, str) else session_id_str
     now_dt = datetime.now(timezone.utc)
 
-    # Remove existing
+    # Remove existing for this session
     db.query(AttendanceRecord).filter(
-        AttendanceRecord.hall_ticket_no == hall_ticket
+        AttendanceRecord.hall_ticket_no == hall_ticket,
+        AttendanceRecord.session_id == session_uuid,
     ).delete()
+
+    gps_dist = payload.get("gpsDistanceMeters")
+    if gps_dist is not None:
+        try:
+            gps_dist = float(gps_dist)
+        except (ValueError, TypeError):
+            gps_dist = None
 
     new_record = AttendanceRecord(
         id=uuid.uuid4(),
@@ -620,7 +634,7 @@ def mark_attendance_direct(
         face_distance=float(payload.get("faceDistance", 0.28)),
         blink_verified=bool(payload.get("blinkVerified", False)),
         biometric_verified=bool(payload.get("biometricVerified", False)),
-        gps_distance_meters=15,
+        gps_distance_meters=gps_dist,
         student_lat=float(payload.get("studentLat", 17.2472)),
         student_lng=float(payload.get("studentLng", 80.1514)),
         manual_reason=payload.get("manualReason", "Faculty override"),

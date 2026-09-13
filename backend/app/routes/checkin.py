@@ -9,7 +9,7 @@ import uuid
 import re
 import logging
 import jwt
-from fastapi import APIRouter, HTTPException, Body, Depends, Security
+from fastapi import APIRouter, HTTPException, Body, Depends, Security, Request
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
@@ -31,6 +31,7 @@ from app.utils.geofence import current_geofence, calculate_haversine_distance
 from app.utils.face_matcher import compare_face_embeddings
 from app.database import get_db, get_db_context
 from app.dependencies.auth import verify_edge_key, get_current_user, require_role
+from app.routes.auth import _rate_limit
 from app.services.face_recognition_service import face_service
 
 logger = logging.getLogger(__name__)
@@ -149,7 +150,11 @@ def validate_checkin_session(token: str, db: Session = Depends(get_db)):
         }
 
     # --- Strategy 2: Plain UUID / Raw token match on current_session ---
-    if current_session:
+    if current_session and clean_token and clean_token in (
+        str(current_session.get("sessionId")),
+        str(current_session.get("token")),
+        str(current_session.get("raw_token"))
+    ):
         session_lat = current_session.get("faculty_lat") or current_geofence["center_lat"]
         session_lng = current_session.get("faculty_lng") or current_geofence["center_lng"]
         radius_m = current_session.get("radius_meters") or 500
@@ -175,22 +180,22 @@ def validate_checkin_session(token: str, db: Session = Depends(get_db)):
 
     # --- Strategy 3: Check active sessions in PostgreSQL ---
     try:
-        now_dt = datetime.now(timezone.utc)
-        # Check by qr_token first, or any active session
         s = None
         if clean_token:
-            s = db.query(AttendanceSession).filter(
-                AttendanceSession.qr_token == clean_token,
-                AttendanceSession.status == "active"
-            ).first()
+            try:
+                clean_uuid = uuid.UUID(clean_token)
+                s = db.query(AttendanceSession).filter(
+                    AttendanceSession.id == clean_uuid,
+                    AttendanceSession.status == "active"
+                ).first()
+            except (ValueError, TypeError):
+                pass
 
-        if not s:
-            s = (
-                db.query(AttendanceSession)
-                .filter(AttendanceSession.status == "active")
-                .order_by(desc(AttendanceSession.created_at))
-                .first()
-            )
+            if not s:
+                s = db.query(AttendanceSession).filter(
+                    AttendanceSession.qr_token == clean_token,
+                    AttendanceSession.status == "active"
+                ).first()
 
         if s:
             geo = s.geofence or {}
@@ -225,49 +230,51 @@ def validate_checkin_session(token: str, db: Session = Depends(get_db)):
             decoded = jwt.decode(clean_token, JWT_SECRET, algorithms=["HS256"])
             sess_id = decoded.get("sessionId")
             if sess_id:
+                s_obj = None
+                try:
+                    s_obj = db.query(AttendanceSession).filter(
+                        AttendanceSession.id == uuid.UUID(sess_id),
+                        AttendanceSession.status == "active"
+                    ).first()
+                except Exception:
+                    pass
+
+                sess_title = s_obj.session_title if s_obj else "Campus Academic Session"
+                fac_name = s_obj.faculty_name if s_obj else decoded.get("facultyId", "Faculty")
+                branch = s_obj.branch if s_obj else decoded.get("branch", "CSE")
+                section = s_obj.section if s_obj else decoded.get("section", "A")
+                room = s_obj.room if s_obj else "Innovation Centre Lab"
+                radius_m = s_obj.radius_meters if s_obj and s_obj.radius_meters else current_geofence["radius_m"]
+
                 return {
                     "valid": True,
                     "session": {
                         "sessionId": sess_id,
-                        "sessionTitle": "Campus Academic Session",
-                        "facultyName": decoded.get("facultyId", "Faculty"),
-                        "branch": decoded.get("branch", "CSE"),
-                        "section": decoded.get("section", "A"),
-                        "room": "Innovation Centre Lab"
+                        "sessionTitle": sess_title,
+                        "facultyName": fac_name,
+                        "branch": branch,
+                        "section": section,
+                        "room": room
                     },
                     "geofence": {
                         "centerLat": current_geofence["center_lat"],
                         "centerLng": current_geofence["center_lng"],
-                        "radiusMeters": current_geofence["radius_m"]
+                        "radiusMeters": radius_m
                     }
                 }
         except Exception:
             pass
 
-    # Fallback to general campus session if no specific session is active
-    return {
-        "valid": True,
-        "session": {
-            "sessionId": f"campus_sess_{datetime.now(timezone.utc).strftime('%Y%m%d')}",
-            "sessionTitle": "SBIT Innovation Centre Academic Session",
-            "facultyName": "Faculty Incharge",
-            "branch": "ALL",
-            "section": "A",
-            "room": "Main Innovation Centre Lab",
-            "faculty_lat": current_geofence["center_lat"],
-            "faculty_lng": current_geofence["center_lng"],
-            "radius_meters": 500
-        },
-        "geofence": {
-            "centerLat": current_geofence["center_lat"],
-            "centerLng": current_geofence["center_lng"],
-            "radiusMeters": 500
-        }
-    }
+    # Fail closed: No valid active session was matched for this token
+    raise HTTPException(
+        status_code=404,
+        detail="No active session found for this QR token or code has expired."
+    )
 
 
 @router.get("/api/student/check-status/{hall_ticket}")
-def get_student_enrollment_status(hall_ticket: str, db: Session = Depends(get_db)):
+@_rate_limit("10/minute")
+def get_student_enrollment_status(request: Request, hall_ticket: str, db: Session = Depends(get_db)):
     """
     Public endpoint: Checks whether a student with Hall Ticket No (2XXXXXXXXX)
     has already enrolled their face & platform biometrics in PostgreSQL.
@@ -343,7 +350,7 @@ def get_student_enrollment_status(hall_ticket: str, db: Session = Depends(get_db
         "year": year,
         "faceEnrolled": is_face_enrolled,
         "biometricEnrolled": is_bio_enrolled,
-        "faceDescriptor": enrolled_desc
+        "faceDescriptor": None  # SECURITY: Never return raw biometric descriptors
     }
     student_profiles[ht] = profile
 
@@ -352,7 +359,7 @@ def get_student_enrollment_status(hall_ticket: str, db: Session = Depends(get_db
         "isRegistered": True,
         "isFaceEnrolled": is_face_enrolled,
         "isBiometricEnrolled": is_bio_enrolled,
-        "faceDescriptor": enrolled_desc,
+        "faceDescriptor": None,  # SECURITY: Never return raw biometric descriptors
         "isAlreadyMarked": already_marked_record is not None,
         "alreadyMarkedRecord": already_marked_record,
         "profile": profile
@@ -464,7 +471,9 @@ def clear_all_registered_biometrics(db: Session = Depends(get_db)):
 
 
 @router.post("/api/student/register-biometrics")
+@_rate_limit("10/minute")
 def register_student_biometrics(
+    request: Request,
     payload: Dict[str, Any] = Body(...),
     db: Session = Depends(get_db)
 ):
@@ -522,36 +531,19 @@ def register_student_biometrics(
     now_dt = datetime.now(timezone.utc)
     try:
         student = db.query(Student).filter(func.upper(Student.hall_ticket_no) == ht).first()
-        if student:
-            student.face_descriptor = face_descriptor
-            student.face_enrollment_status = "enrolled" if face_descriptor else "pending"
-            student.face_enrolled_at = now_dt if face_descriptor else None
-            student.biometric_credential_id = bio_credential_id
-            student.biometric_enrollment_status = "enrolled" if bio_credential_id else "pending"
-            student.biometric_enrolled_at = now_dt if bio_credential_id else None
-            student.status = "approved"
-            student.updated_at = now_dt
-        else:
-            student = Student(
-                id=uuid.uuid4(),
-                email=f"{ht.lower()}@sbit.ac.in",
-                hall_ticket_no=ht,
-                name=student_name,
-                role="student",
-                status="approved",
-                branch=branch,
-                section=section,
-                year=str(year or 3),
-                face_descriptor=face_descriptor,
-                face_enrollment_status="enrolled" if face_descriptor else "pending",
-                face_enrolled_at=now_dt if face_descriptor else None,
-                biometric_credential_id=bio_credential_id,
-                biometric_enrollment_status="enrolled" if bio_credential_id else "pending",
-                biometric_enrolled_at=now_dt if bio_credential_id else None,
-                created_at=now_dt,
-                updated_at=now_dt
+        if not student:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Student {ht} not found. Enrollment only allowed against admin-imported records."
             )
-            db.add(student)
+        student.face_descriptor = face_descriptor
+        student.face_enrollment_status = "enrolled" if face_descriptor else "pending"
+        student.face_enrolled_at = now_dt if face_descriptor else None
+        student.biometric_credential_id = bio_credential_id
+        student.biometric_enrollment_status = "enrolled" if bio_credential_id else "pending"
+        student.biometric_enrolled_at = now_dt if bio_credential_id else None
+        student.status = "approved"
+        student.updated_at = now_dt
 
         # Update student_face_embeddings
         if face_descriptor:
@@ -692,7 +684,9 @@ def get_student_attendance_history(hall_ticket: str, db: Session = Depends(get_d
 
 
 @router.post("/api/checkin/verify")
+@_rate_limit("5/minute")
 async def verify_student_checkin(
+    request: Request,
     payload: VerifyCheckinPayload,
     db: Session = Depends(get_db)
 ):
@@ -777,14 +771,19 @@ async def verify_student_checkin(
             except Exception:
                 pass
 
-        # Strategy 5: Universal Active Campus Session Fallback
+        # If no valid, unexpired session token is found, fail closed — do not synthesize a session
         if not session_id:
-            session_id = f"campus_sess_{datetime.now(timezone.utc).strftime('%Y%m%d')}"
-            session_title = "SBIT Innovation Centre Academic Session"
+            raise HTTPException(
+                status_code=403,
+                detail="Invalid or expired session token. A valid check-in session is required."
+            )
 
-    # Auto-resolve student GPS coordinates to campus anchor if unavailable
-    student_lat = payload.lat if (payload.lat and payload.lat != 0) else session_lat
-    student_lng = payload.lng if (payload.lng and payload.lng != 0) else session_lng
+    # Reject if GPS coordinates are missing — do not backfill with session location
+    if not payload.lat or not payload.lng:
+        raise HTTPException(status_code=400, detail="GPS coordinates (lat/lng) are required for geofence verification.")
+
+    student_lat = payload.lat
+    student_lng = payload.lng
 
     # 2. Check for Duplicate Check-in
     session_uuid = None
@@ -836,7 +835,7 @@ async def verify_student_checkin(
         current_geofence["center_lng"]
     )
     if distance_m > session_radius and campus_dist > 5000:
-        logger.info(f"Student distance check: session_dist={distance_m}m, campus_dist={campus_dist}m")
+        raise HTTPException(status_code=403, detail="Outside the allowed check-in radius.")
 
     # 4. Face Recognition & Liveness Matching
     face_match_confidence = 0.95
@@ -867,6 +866,10 @@ async def verify_student_checkin(
         face_distance = dist
         face_match_confidence = max(conf / 100.0, 0.01)
         logger.info(f"[Face] Comparison for {hall_ticket}: dist={dist:.4f}, conf={conf}%, match={match}, blink={payload.blinkVerified}")
+
+        # SECURITY: Liveness is client-reported — flag for manual review
+        if payload.blinkVerified:
+            logger.warning(f"[SECURITY] Manual review flag: {hall_ticket} check-in has blinkVerified=true without server-side liveness evidence")
 
         if not match:
             logger.warning(f"[Face] Verification failed for {hall_ticket}: dist={dist:.4f}, conf={conf}%, blink={payload.blinkVerified}")

@@ -10,6 +10,9 @@ if backend_env.exists():
 else:
     load_dotenv()
 
+NODE_ENV = os.getenv("NODE_ENV", "development").lower()
+IS_PRODUCTION = NODE_ENV == "production"
+
 PORT = int(os.getenv("PORT", "5000"))
 CORS_ORIGIN = os.getenv("CORS_ORIGIN", "http://localhost:3000")
 CORS_ORIGINS_RAW = os.getenv("CORS_ORIGINS", CORS_ORIGIN)
@@ -19,6 +22,10 @@ CORS_ORIGINS = [orig.strip() for orig in CORS_ORIGINS_RAW.split(",") if orig.str
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgrespassword@localhost:5432/smartattend")
 if not os.path.exists("/.dockerenv") and "@postgres:" in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.replace("@postgres:", "@localhost:")
+
+# Reject default DB password in production
+if IS_PRODUCTION and ("postgrespassword" in DATABASE_URL or "localdevpassword123" in DATABASE_URL):
+    raise RuntimeError("CRITICAL SECURITY ERROR: POSTGRES_PASSWORD must not be the default in production.")
 
 # Redis configuration for OTP with TTL
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
@@ -32,9 +39,6 @@ BREVO_SMTP_LOGIN = os.getenv("BREVO_SMTP_LOGIN", "")
 BREVO_SMTP_KEY = os.getenv("BREVO_SMTP_KEY", "")
 BREVO_FROM_EMAIL = os.getenv("BREVO_FROM_EMAIL", "")
 BREVO_FROM_NAME = os.getenv("BREVO_FROM_NAME", "Smart Attend — SBIT")
-
-NODE_ENV = os.getenv("NODE_ENV", "development").lower()
-IS_PRODUCTION = NODE_ENV == "production"
 
 # ---------------------------------------------------------------------------
 # Security Secrets — MUST be overridden in production
@@ -54,3 +58,8 @@ if IS_PRODUCTION and (not EDGE_API_KEY or EDGE_API_KEY == _INSECURE_EDGE_DEFAULT
 # ---------------------------------------------------------------------------
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@sbit.ac.in")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Admin@123!")
+
+if IS_PRODUCTION and (not ADMIN_EMAIL or ADMIN_EMAIL == "admin@sbit.ac.in"):
+    raise RuntimeError("CRITICAL SECURITY ERROR: ADMIN_EMAIL must be set via environment variable in production.")
+if IS_PRODUCTION and (not ADMIN_PASSWORD or ADMIN_PASSWORD == "Admin@123!"):
+    raise RuntimeError("CRITICAL SECURITY ERROR: ADMIN_PASSWORD must be set via environment variable in production.")

@@ -6,7 +6,7 @@ All face vectors and DPDP biometric consent records are stored in PostgreSQL.
 
 import uuid
 import logging
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
@@ -17,6 +17,7 @@ from app.models.schemas import FaceEmbeddingPayload, FaceEnrollmentRequest
 from app.models.db_models import Student, StudentFaceEmbedding, AuditLog
 from app.database import get_db
 from app.dependencies.auth import get_current_user
+from app.routes.auth import _rate_limit
 from app.services.face_recognition_service import face_service
 
 logger = logging.getLogger(__name__)
@@ -115,7 +116,9 @@ def _find_user(db: Session, student_id: str, normalized_ht: Optional[str] = None
 
 @router.post("/{student_id}/enroll-face")
 @router.post("/{student_id}/face")
+@_rate_limit("10/minute")
 def enroll_student_face(
+    request: Request,
     student_id: str,
     payload: FaceEnrollmentRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),

@@ -16,7 +16,7 @@ from app.models.schemas import GeofenceUpdatePayload
 from app.models.db_models import Admin, Faculty, Student, AttendanceSession, AttendanceRecord, GeofenceConfig
 from app.utils.geofence import current_geofence, update_geofence
 from app.database import get_db
-from app.dependencies.auth import require_role
+from app.dependencies.auth import get_current_user, require_role
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def get_admin_stats(db: Session = Depends(get_db)):
         "serverTime": datetime.now(timezone.utc).isoformat() + "Z"
     }
 
-@router.get("/geofence")
+@router.get("/geofence", dependencies=[Depends(get_current_user)])
 def get_geofence(db: Session = Depends(get_db)):
     """
     Read current campus center point + allowed radius from PostgreSQL.
