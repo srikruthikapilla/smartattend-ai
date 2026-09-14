@@ -479,6 +479,7 @@ def register_student_biometrics(
 ):
     """
     First-time student self-service enrollment for Face vector & Platform Biometrics in PostgreSQL.
+    Requires enrollment_token for first-time enrollment to prevent identity spoofing.
     """
     ht = payload.get("hallTicketNo", "").strip().upper()
     if not re.match(r"^2[0-9A-Z]{9}$", ht):
@@ -489,6 +490,7 @@ def register_student_biometrics(
     student_name = payload.get("name") or f"Student ({ht})"
     branch = payload.get("branch") or "CSE"
     section = payload.get("section") or "A"
+    enrollment_token = payload.get("enrollmentToken")
 
     if face_descriptor:
         if not isinstance(face_descriptor, list) or len(face_descriptor) not in (128, 512):
@@ -502,6 +504,29 @@ def register_student_biometrics(
                 status_code=409,
                 detail=f"Face biometrics are already enrolled for {ht}. To re-register, use the 'Re-enroll Face' option first or contact your faculty."
             )
+
+        # SECURITY: Require enrollment token for first-time enrollment
+        if not existing_descriptor:
+            if not enrollment_token:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Enrollment token required for first-time face enrollment. Please request an OTP verification code via /api/auth/student/enrollment/request-otp."
+                )
+            
+            try:
+                decoded = jwt.decode(enrollment_token, JWT_SECRET, algorithms=["HS256"])
+                if decoded.get("type") != "enrollment" or decoded.get("ht") != ht:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Invalid or expired enrollment token."
+                    )
+                logger.info(f"[Security] Verified enrollment token for {ht}")
+            except Exception as e:
+                logger.warning(f"[Security] Invalid enrollment token for {ht}: {e}")
+                raise HTTPException(
+                    status_code=403,
+                    detail="Invalid or expired enrollment token. Please request a new OTP verification code."
+                )
 
         now_iso = datetime.now(timezone.utc).isoformat()
         student_face_cache[ht] = {

@@ -63,3 +63,12 @@ if IS_PRODUCTION and (not ADMIN_EMAIL or ADMIN_EMAIL == "admin@sbit.ac.in"):
     raise RuntimeError("CRITICAL SECURITY ERROR: ADMIN_EMAIL must be set via environment variable in production.")
 if IS_PRODUCTION and (not ADMIN_PASSWORD or ADMIN_PASSWORD == "Admin@123!"):
     raise RuntimeError("CRITICAL SECURITY ERROR: ADMIN_PASSWORD must be set via environment variable in production.")
+
+# ---------------------------------------------------------------------------
+# Cookie Configuration for httpOnly JWT
+# ---------------------------------------------------------------------------
+COOKIE_NAME = "sbit_auth_token"
+COOKIE_MAX_AGE = 8 * 3600  # 8 hours in seconds (matches JWT expiry)
+COOKIE_DOMAIN = os.getenv("COOKIE_DOMAIN", None)  # None for current domain
+COOKIE_SECURE = IS_PRODUCTION  # Secure flag only in production
+COOKIE_SAMESITE = "lax"  # CSRF protection: 'strict', 'lax', or 'none'

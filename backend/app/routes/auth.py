@@ -11,16 +11,17 @@ import secrets
 import time
 import uuid
 import logging
+import re
 from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status, Depends, Request
+from fastapi import APIRouter, HTTPException, status, Depends, Request, Response
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 import jwt as pyjwt
 
-from app.config import JWT_SECRET
+from app.config import JWT_SECRET, COOKIE_NAME, COOKIE_MAX_AGE, COOKIE_DOMAIN, COOKIE_SECURE, COOKIE_SAMESITE
 from app.database import get_db
 from app.dependencies.auth import get_current_user, get_optional_current_user, require_role
 from app.models.db_models import Admin, Faculty, Student
@@ -135,6 +136,13 @@ class BulkFacultyItem(BaseModel):
 class BulkFacultyRequest(BaseModel):
     faculty: List[BulkFacultyItem]
 
+class StudentEnrollmentOTPRequest(BaseModel):
+    hall_ticket_no: str
+
+class VerifyEnrollmentOTPRequest(BaseModel):
+    hall_ticket_no: str
+    otp: str
+
 
 # ── Endpoints ───────────────────────────────────────────────────────────────
 
@@ -176,13 +184,29 @@ def get_all_users(
     }
 
 
+@router.post("/logout")
+def logout(response: Response):
+    """
+    Logout user by clearing the httpOnly cookie.
+    """
+    response.delete_cookie(
+        key=COOKIE_NAME,
+        domain=COOKIE_DOMAIN,
+        secure=COOKIE_SECURE,
+        httponly=True,
+        samesite=COOKIE_SAMESITE
+    )
+    return {"success": True, "message": "Logged out successfully"}
+
+
 @router.post("/login")
 @_rate_limit("10/minute")
-def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
+def login(request: Request, response: Response, payload: LoginRequest, db: Session = Depends(get_db)):
     """
     Authenticate user against PostgreSQL:
     - Authentication is strictly enabled for Admins and Faculty only.
     - Rejects students with informative guidance (students use Face AI / Kiosk).
+    - Sets httpOnly cookie with JWT token for secure authentication.
     """
     clean_email = payload.email.strip().lower()
 
@@ -216,10 +240,20 @@ def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)
             "exp": int(time.time()) + (8 * 3600)  # 8-hour session
         }
         access_token = pyjwt.encode(token_payload, JWT_SECRET, algorithm="HS256")
+        
+        # Set httpOnly cookie
+        response.set_cookie(
+            key=COOKIE_NAME,
+            value=access_token,
+            max_age=COOKIE_MAX_AGE,
+            domain=COOKIE_DOMAIN,
+            secure=COOKIE_SECURE,
+            httponly=True,
+            samesite=COOKIE_SAMESITE
+        )
+        
         return {
             "success": True,
-            "access_token": access_token,
-            "token_type": "bearer",
             "user": admin.to_dict()
         }
 
@@ -252,10 +286,20 @@ def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)
             "exp": int(time.time()) + (8 * 3600)  # 8-hour session
         }
         access_token = pyjwt.encode(token_payload, JWT_SECRET, algorithm="HS256")
+        
+        # Set httpOnly cookie
+        response.set_cookie(
+            key=COOKIE_NAME,
+            value=access_token,
+            max_age=COOKIE_MAX_AGE,
+            domain=COOKIE_DOMAIN,
+            secure=COOKIE_SECURE,
+            httponly=True,
+            samesite=COOKIE_SAMESITE
+        )
+        
         return {
             "success": True,
-            "access_token": access_token,
-            "token_type": "bearer",
             "user": faculty.to_dict()
         }
 
@@ -766,4 +810,128 @@ def admin_direct_reset(
     return {
         "success": True,
         "message": f"Password for {clean_email} updated successfully."
+    }
+
+
+# ── Student Enrollment OTP Verification ──
+
+@router.post("/student/enrollment/request-otp")
+@_rate_limit("3/minute")
+def request_student_enrollment_otp(
+    request: Request,
+    payload: StudentEnrollmentOTPRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Request OTP for first-time student face enrollment.
+    1. Verify student exists in database (admin-imported record).
+    2. Check if student has email address.
+    3. Generate 6-digit OTP and store in Redis with 10-minute TTL.
+    4. Dispatch email via Brevo SMTP.
+    """
+    clean_ht = payload.hall_ticket_no.strip().upper()
+    
+    if not re.match(r"^2[0-9A-Z]{9}$", clean_ht):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid Hall Ticket format. Must be 10 characters starting with '2'."
+        )
+
+    # Look up student in database
+    student = db.query(Student).filter(
+        func.upper(Student.hall_ticket_no) == clean_ht
+    ).first()
+
+    if not student:
+        # Return generic message to prevent hall ticket enumeration
+        return {
+            "success": True,
+            "message": "If a student record exists with this Hall Ticket, a verification code has been dispatched to their institutional email.",
+            "hall_ticket_no": clean_ht,
+            "expires_in_seconds": 600
+        }
+
+    if not student.email:
+        raise HTTPException(
+            status_code=400,
+            detail="Student record has no email address. Please contact administration to update your email before enrolling."
+        )
+
+    # Generate 6-digit OTP
+    otp_code = f"{secrets.randbelow(900000) + 100000}"
+
+    # Store in Redis with 10-minute (600s) TTL using hall ticket as key
+    otp_key = f"enrollment_otp:{clean_ht}"
+    set_otp(otp_key, otp_code, ttl_seconds=600)
+
+    # Send email via Brevo SMTP
+    send_otp_email(student.email, student.name, otp_code)
+
+    logger.info(f"[Enrollment OTP] Sent enrollment OTP for {clean_ht} to {student.email}")
+
+    return {
+        "success": True,
+        "message": "Enrollment verification code dispatched to your institutional email.",
+        "email_masked": student.email[:3] + "***" + student.email.split("@")[1],
+        "expires_in_seconds": 600
+    }
+
+
+@router.post("/student/enrollment/verify-otp")
+@_rate_limit("10/minute")
+def verify_student_enrollment_otp(
+    request: Request,
+    payload: VerifyEnrollmentOTPRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Verify OTP for student enrollment.
+    Returns a temporary enrollment token that can be used for face enrollment.
+    """
+    clean_ht = payload.hall_ticket_no.strip().upper()
+    otp_key = f"enrollment_otp:{clean_ht}"
+    stored_otp = get_otp(otp_key)
+
+    if not stored_otp:
+        raise HTTPException(
+            status_code=400,
+            detail="No active enrollment request found or verification code has expired. Please request a new code."
+        )
+
+    if str(payload.otp).strip() != str(stored_otp).strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid verification code."
+        )
+
+    # Verify student exists
+    student = db.query(Student).filter(
+        func.upper(Student.hall_ticket_no) == clean_ht
+    ).first()
+
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail="Student record not found."
+        )
+
+    # Delete OTP from Redis after successful verification
+    delete_otp(otp_key)
+
+    # Generate temporary enrollment token (valid for 30 minutes)
+    enrollment_token_payload = {
+        "ht": clean_ht,
+        "email": student.email,
+        "type": "enrollment",
+        "exp": int(time.time()) + 1800  # 30 minutes
+    }
+    enrollment_token = pyjwt.encode(enrollment_token_payload, JWT_SECRET, algorithm="HS256")
+
+    logger.info(f"[Enrollment OTP] Verified OTP for {clean_ht}, issued enrollment token")
+
+    return {
+        "success": True,
+        "message": "Verification successful. You may now proceed with face enrollment.",
+        "enrollment_token": enrollment_token,
+        "expires_in_seconds": 1800
     }

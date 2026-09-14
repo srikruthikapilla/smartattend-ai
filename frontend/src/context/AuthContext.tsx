@@ -167,59 +167,23 @@ export const AuthProvider: React.FC<{
 
   const [currentUser, setCurrentUser] =
     useState<UserProfile | null>(() => {
-      const token = localStorage.getItem("sbit_auth_token");
-      const saved = localStorage.getItem("sbit_current_user");
-      // If there is no valid auth token in localStorage, do not restore an unauthenticated session
-      if (!token) {
-        localStorage.removeItem("sbit_current_user");
-        return null;
-      }
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (
-            !parsed ||
-            ['admin_101', 'faculty_201', 'faculty_202', 'student_301'].includes(parsed?.uid) ||
-            ['p.srinivas@sbit.ac.in', 'm.radhika@sbit.ac.in', 'admin@sbit.ac.in'].includes(parsed?.email?.toLowerCase() || '') ||
-            (parsed?.name && parsed.name.toLowerCase().includes('srinivas'))
-          ) {
-            localStorage.removeItem("sbit_current_user");
-            localStorage.removeItem("sbit_auth_token");
-            return null;
-          }
-          return parsed;
-        } catch {
-          return null;
-        }
-      }
+      // User session is now managed via httpOnly cookies on the backend
+      // We'll fetch the current user on mount to restore session
       return null;
     });
 
   useEffect(() => {
-    localStorage.setItem(
-      "sbit_users",
-      JSON.stringify(users)
-    );
+    // Users are now managed on the backend, no localStorage needed
   }, [users]);
 
   useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem(
-        "sbit_current_user",
-        JSON.stringify(currentUser)
-      );
-    } else {
-      localStorage.removeItem(
-        "sbit_current_user"
-      );
-    }
+    // Current user is now managed via httpOnly cookies on the backend
+    // No localStorage needed for user state
   }, [currentUser]);
 
   // Synchronization with backend PostgreSQL users table
   const refreshUsers = async (): Promise<void> => {
-    const token = localStorage.getItem('sbit_auth_token');
-    if (!token) return;
-
+    // Token is now in httpOnly cookie, no localStorage needed
     const endpoints = [
       '/api/auth/users',
       '/api/auth/users',
@@ -229,9 +193,7 @@ export const AuthProvider: React.FC<{
     for (const ep of endpoints) {
       try {
         const res = await fetch(ep, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
+          credentials: 'include' // Include httpOnly cookie
         });
         if (res.ok) {
           const data = await res.json();
@@ -292,22 +254,21 @@ export const AuthProvider: React.FC<{
         const response = await fetch(ep, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ email: cleanEmail, password, role })
         });
 
         if (response.ok) {
           const data = await response.json();
           if (data.success && data.user) {
-            if (data.access_token) {
-              localStorage.setItem('sbit_auth_token', data.access_token);
-            }
+            // Token is now set as httpOnly cookie by backend
+            // No localStorage storage needed
             const backendUser: UserProfile = data.user;
             setUsers(prev => {
               const exists = prev.some(u => u.uid === backendUser.uid || u.email === backendUser.email);
               return exists ? prev.map(u => u.email === backendUser.email ? backendUser : u) : [backendUser, ...prev];
             });
             setCurrentUser(backendUser);
-            localStorage.setItem("sbit_current_user", JSON.stringify(backendUser));
             return true;
           }
         } else {
@@ -331,12 +292,18 @@ export const AuthProvider: React.FC<{
     throw new Error("Unable to authenticate. Please verify your credentials.");
   };
 
-  const logout = () => {
-    localStorage.removeItem('sbit_auth_token');
-    localStorage.removeItem('sbit_current_user');
-    localStorage.removeItem('sbit_users');
-    localStorage.removeItem('sbit_attendance_records');
-    localStorage.removeItem('sbit_active_session');
+  const logout = async () => {
+    // Call backend logout to clear httpOnly cookie
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include' // Important: include cookies
+      });
+    } catch (err) {
+      console.warn('Backend logout note:', err);
+    }
+    
+    // Clear local state
     setCurrentUser(null);
     setUsers([]);
   };
@@ -356,6 +323,7 @@ export const AuthProvider: React.FC<{
         const response = await fetch(ep, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ email: cleanEmail })
         });
 
@@ -391,6 +359,7 @@ export const AuthProvider: React.FC<{
         const response = await fetch(ep, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({
             email: cleanEmail,
             otp,
@@ -429,7 +398,7 @@ export const AuthProvider: React.FC<{
       throw new Error("Password must be at least 4 characters long.");
     }
 
-    const token = localStorage.getItem('sbit_auth_token');
+    // Token is now in httpOnly cookie
     const endpoints = [
       '/api/auth/register',
       '/api/auth/register',
@@ -444,11 +413,12 @@ export const AuthProvider: React.FC<{
         const headers: Record<string, string> = {
           'Content-Type': 'application/json'
         };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
+        // No Authorization header needed - httpOnly cookie is used
 
         const res = await fetch(ep, {
           method: 'POST',
           headers,
+          credentials: 'include',
           body: JSON.stringify({
             email: cleanEmail,
             password: password,
@@ -518,7 +488,7 @@ export const AuthProvider: React.FC<{
       throw new Error("Password must be at least 4 characters long.");
     }
 
-    const token = localStorage.getItem('sbit_auth_token');
+    // Token is now in httpOnly cookie
     const endpoints = [
       '/api/auth/register',
       '/api/auth/register',
@@ -533,11 +503,12 @@ export const AuthProvider: React.FC<{
         const headers: Record<string, string> = {
           'Content-Type': 'application/json'
         };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
+        // No Authorization header needed - httpOnly cookie is used
 
         const res = await fetch(ep, {
           method: 'POST',
           headers,
+          credentials: 'include',
           body: JSON.stringify({
             email: cleanEmail,
             password: password,
@@ -626,6 +597,7 @@ export const AuthProvider: React.FC<{
       await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           email: cleanEmail,
           name: data.name.trim(),
@@ -780,7 +752,7 @@ export const AuthProvider: React.FC<{
       try {
         const token = localStorage.getItem('sbit_auth_token');
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
+        // No Authorization header needed - httpOnly cookie is used
 
         await fetch('/api/auth/users/bulk', {
           method: 'POST',
@@ -878,7 +850,7 @@ export const AuthProvider: React.FC<{
       for (const ep of endpoints) {
         try {
           const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-          if (token) headers['Authorization'] = `Bearer ${token}`;
+          // No Authorization header needed - httpOnly cookie is used
 
           const res = await fetch(ep, {
             method: 'POST',
@@ -957,7 +929,7 @@ export const AuthProvider: React.FC<{
     uid: string,
     updates: Partial<UserProfile>
   ) => {
-    const token = localStorage.getItem('sbit_auth_token');
+    // Token is now in httpOnly cookie
     const endpoints = [
       `/api/auth/users/${encodeURIComponent(uid)}`,
       `/api/auth/users/${encodeURIComponent(uid)}`,
@@ -970,7 +942,7 @@ export const AuthProvider: React.FC<{
     for (const ep of endpoints) {
       try {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
+        // No Authorization header needed - httpOnly cookie is used
 
         const res = await fetch(ep, {
           method: 'PUT',
@@ -1019,7 +991,7 @@ export const AuthProvider: React.FC<{
   };
 
   const deleteUser = async (uid: string): Promise<void> => {
-    const token = localStorage.getItem('sbit_auth_token');
+    // Token is now in httpOnly cookie
     const endpoints = [
       `/api/auth/users/${encodeURIComponent(uid)}`,
       `/api/auth/users/${encodeURIComponent(uid)}`,
@@ -1032,7 +1004,7 @@ export const AuthProvider: React.FC<{
     for (const ep of endpoints) {
       try {
         const headers: Record<string, string> = {};
-        if (token) headers['Authorization'] = `Bearer ${token}`;
+        // No Authorization header needed - httpOnly cookie is used
 
         const res = await fetch(ep, {
           method: 'DELETE',
@@ -1088,15 +1060,15 @@ export const AuthProvider: React.FC<{
 
 
     // 2. FastAPI backend sync
-    const token = localStorage.getItem('sbit_auth_token') || localStorage.getItem('token');
+    // Token is now in httpOnly cookie
     const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) authHeaders['Authorization'] = `Bearer ${token}`;
 
     if (hallTicketNo) {
       try {
         const resp = await fetch('/api/student/register-biometrics', {
           method: 'POST',
           headers: authHeaders,
+          credentials: 'include',
           body: JSON.stringify({
             hallTicketNo: hallTicketNo,
             name: student?.name || currentUser?.name || `Student (${hallTicketNo})`,
@@ -1121,6 +1093,7 @@ export const AuthProvider: React.FC<{
       const resp = await fetch(`/api/students/${targetId}/enroll-face`, {
         method: 'POST',
         headers: authHeaders,
+        credentials: 'include',
         body: JSON.stringify({
           faceDescriptor: descriptor,
           hallTicketNo: hallTicketNo,
@@ -1168,22 +1141,22 @@ export const AuthProvider: React.FC<{
 
 
     // 2. Call backend /api/students/{id}/revoke-face-data
-    const token = localStorage.getItem('sbit_auth_token') || localStorage.getItem('token');
+    // Token is now in httpOnly cookie
     const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) authHeaders['Authorization'] = `Bearer ${token}`;
 
     const targetId = hallTicketNo || uid;
     try {
       await fetch(`/api/students/${targetId}/revoke-face-data`, {
         method: 'DELETE',
-        headers: authHeaders
+        headers: authHeaders,
+        credentials: 'include'
       });
     } catch (e) {
       console.warn("Backend revoke face notice:", e);
     }
 
     if (hallTicketNo) {
-      localStorage.removeItem(`enrolled_${hallTicketNo}`);
+      // No localStorage needed for enrollment state
     }
 
     setUsers(prev =>
@@ -1228,6 +1201,7 @@ export const AuthProvider: React.FC<{
         await fetch('/api/student/register-biometrics', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({
             hallTicketNo: hallTicketNo,
             name: student?.name || currentUser?.name || `Student (${hallTicketNo})`,

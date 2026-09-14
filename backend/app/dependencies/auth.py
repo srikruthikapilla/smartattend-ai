@@ -1,31 +1,40 @@
 import os
 import jwt
 from typing import Optional, List, Union, Dict, Any
-from fastapi import Header, HTTPException, Depends, Security
+from fastapi import Header, HTTPException, Depends, Security, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from app.config import JWT_SECRET, EDGE_API_KEY
+from app.config import JWT_SECRET, EDGE_API_KEY, COOKIE_NAME
 
 security_scheme = HTTPBearer(auto_error=False)
 
 def get_current_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Security(security_scheme),
     authorization: Optional[str] = Header(None)
 ) -> Dict[str, Any]:
     """
-    Validates Bearer token from HTTP Authorization header.
+    Validates JWT token from either:
+    1. HTTP Authorization header (Bearer token) - for backward compatibility
+    2. httpOnly cookie (sbit_auth_token) - new secure method
     Decodes and verifies native JWT tokens signed with JWT_SECRET (HS256).
     Fails closed: Any missing, expired, or invalid token raises HTTP 401.
     """
     token = None
+    
+    # Try Authorization header first (backward compatibility)
     if credentials:
         token = credentials.credentials
     elif authorization and authorization.startswith("Bearer "):
         token = authorization.split(" ", 1)[1].strip()
+    
+    # Fall back to cookie
+    if not token:
+        token = request.cookies.get(COOKIE_NAME)
 
     if not token:
         raise HTTPException(
             status_code=401,
-            detail="Missing or invalid Authorization header. Bearer token required.",
+            detail="Authentication required. Please log in.",
             headers={"WWW-Authenticate": "Bearer"}
         )
 
