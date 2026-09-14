@@ -158,6 +158,18 @@ export function calculateEyeAspectRatio(landmarks: any): {
 }
 
 /**
+ * Extracts 68 facial landmark coordinates as an array of [x, y] pairs for server-side verification.
+ */
+export function extractLandmarkPoints(landmarks: any): number[][] {
+  const positions = landmarks?.positions || landmarks?.relativePositions || landmarks;
+  if (!positions || !Array.isArray(positions)) return [];
+  return positions.map((p: any) => [
+    Number((p.x ?? p[0] ?? 0).toFixed(2)),
+    Number((p.y ?? p[1] ?? 0).toFixed(2))
+  ]);
+}
+
+/**
  * Adaptive Real-time Blink & Liveness Tracker state machine.
  * Tracks personal open-eye baseline and uses sliding window valley detection
  * to reliably catch natural human blinks across varying camera frame rates.
@@ -293,6 +305,10 @@ export class BlinkDetector {
     this.closedFrames = 0;
     this.earHistory = [];
     this.calibrationFrames = 0;
+  }
+
+  public getEarHistory(): number[] {
+    return [...this.earHistory];
   }
 }
 

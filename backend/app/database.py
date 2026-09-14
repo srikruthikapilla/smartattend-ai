@@ -95,23 +95,20 @@ def init_db() -> None:
             db.commit()
             logger.info("Default SBIT campus geofence row seeded.")
 
-        # --- Bootstrap admin from environment variables ---
-        admin_count = db.query(Admin).count()
-        if admin_count == 0:
-            if not ADMIN_EMAIL or not ADMIN_PASSWORD:
-                logger.warning(
-                    "No admin accounts exist and ADMIN_EMAIL/ADMIN_PASSWORD are not set. "
-                    "Set these env vars to create the bootstrap admin automatically."
-                )
-            else:
-                from sqlalchemy import func
-                existing_admin = db.query(Admin).filter(
-                    func.lower(Admin.email) == ADMIN_EMAIL.strip().lower()
-                ).first()
-                if not existing_admin:
+        # --- Bootstrap / Sync admin from environment variables ---
+        if ADMIN_EMAIL and ADMIN_PASSWORD:
+            from sqlalchemy import func
+            from app.utils.security import verify_password
+            clean_email = ADMIN_EMAIL.strip().lower()
+            existing_admin = db.query(Admin).filter(
+                func.lower(Admin.email) == clean_email
+            ).first()
+
+            if not existing_admin:
+                if db.query(Admin).count() == 0:
                     bootstrap_admin = Admin(
                         id=uuid.uuid4(),
-                        email=ADMIN_EMAIL.strip().lower(),
+                        email=clean_email,
                         password_hash=hash_password(ADMIN_PASSWORD),
                         name="System Administrator",
                         role="admin",
@@ -123,7 +120,18 @@ def init_db() -> None:
                     )
                     db.add(bootstrap_admin)
                     db.commit()
-                    logger.info(f"Bootstrap administrator created: {ADMIN_EMAIL}")
+                    logger.info(f"Bootstrap administrator created: {clean_email}")
+            else:
+                # Synchronize password with ADMIN_PASSWORD env var if it changed
+                if not verify_password(ADMIN_PASSWORD, existing_admin.password_hash):
+                    existing_admin.password_hash = hash_password(ADMIN_PASSWORD)
+                    existing_admin.updated_at = datetime.now(timezone.utc)
+                    db.commit()
+                    logger.info(f"Synchronized administrator password from environment for: {clean_email}")
+        else:
+            logger.warning(
+                "ADMIN_EMAIL or ADMIN_PASSWORD is not set. Skipping admin bootstrap."
+            )
 
     # Quick connectivity check
     try:

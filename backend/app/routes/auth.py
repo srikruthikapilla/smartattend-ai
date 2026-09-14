@@ -199,6 +199,40 @@ def logout(response: Response):
     return {"success": True, "message": "Logged out successfully"}
 
 
+@router.get("/me")
+def get_me(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns the authenticated user's profile based on session cookie or Bearer token.
+    """
+    role = current_user.get("role", "").lower()
+    user_id = current_user.get("id") or current_user.get("sub")
+    
+    if role == "admin":
+        user = db.query(Admin).filter(Admin.id == user_id).first()
+        if not user:
+            user = db.query(Admin).filter(func.lower(Admin.email) == current_user.get("email", "").lower()).first()
+        if user:
+            return {"success": True, "user": user.to_dict()}
+    elif role == "faculty":
+        user = db.query(Faculty).filter(Faculty.id == user_id).first()
+        if not user:
+            user = db.query(Faculty).filter(func.lower(Faculty.email) == current_user.get("email", "").lower()).first()
+        if user:
+            return {"success": True, "user": user.to_dict()}
+    elif role == "student":
+        user = db.query(Student).filter(Student.id == user_id).first()
+        if not user:
+            user = db.query(Student).filter(func.lower(Student.email) == current_user.get("email", "").lower()).first()
+        if user:
+            return {"success": True, "user": user.to_dict()}
+            
+    return {"success": True, "user": current_user}
+
+
+
 @router.post("/login")
 @_rate_limit("10/minute")
 def login(request: Request, response: Response, payload: LoginRequest, db: Session = Depends(get_db)):
@@ -254,6 +288,8 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
         
         return {
             "success": True,
+            "token": access_token,
+            "access_token": access_token,
             "user": admin.to_dict()
         }
 
@@ -300,6 +336,8 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
         
         return {
             "success": True,
+            "token": access_token,
+            "access_token": access_token,
             "user": faculty.to_dict()
         }
 

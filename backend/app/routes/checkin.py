@@ -29,6 +29,7 @@ from app.routes.qr_session import current_session, valid_session_tokens
 from app.routes.student_face import student_face_cache
 from app.utils.geofence import current_geofence, calculate_haversine_distance
 from app.utils.face_matcher import compare_face_embeddings
+from app.utils.blink_detection import verify_live_blink
 from app.database import get_db, get_db_context
 from app.dependencies.auth import verify_edge_key, get_current_user, require_role
 from app.routes.auth import _rate_limit
@@ -479,7 +480,7 @@ def register_student_biometrics(
 ):
     """
     First-time student self-service enrollment for Face vector & Platform Biometrics in PostgreSQL.
-    Requires enrollment_token for first-time enrollment to prevent identity spoofing.
+    Allows first-time face enrollment for admin-imported student records.
     """
     ht = payload.get("hallTicketNo", "").strip().upper()
     if not re.match(r"^2[0-9A-Z]{9}$", ht):
@@ -490,7 +491,6 @@ def register_student_biometrics(
     student_name = payload.get("name") or f"Student ({ht})"
     branch = payload.get("branch") or "CSE"
     section = payload.get("section") or "A"
-    enrollment_token = payload.get("enrollmentToken")
 
     if face_descriptor:
         if not isinstance(face_descriptor, list) or len(face_descriptor) not in (128, 512):
@@ -504,29 +504,6 @@ def register_student_biometrics(
                 status_code=409,
                 detail=f"Face biometrics are already enrolled for {ht}. To re-register, use the 'Re-enroll Face' option first or contact your faculty."
             )
-
-        # SECURITY: Require enrollment token for first-time enrollment
-        if not existing_descriptor:
-            if not enrollment_token:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Enrollment token required for first-time face enrollment. Please request an OTP verification code via /api/auth/student/enrollment/request-otp."
-                )
-            
-            try:
-                decoded = jwt.decode(enrollment_token, JWT_SECRET, algorithms=["HS256"])
-                if decoded.get("type") != "enrollment" or decoded.get("ht") != ht:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Invalid or expired enrollment token."
-                    )
-                logger.info(f"[Security] Verified enrollment token for {ht}")
-            except Exception as e:
-                logger.warning(f"[Security] Invalid enrollment token for {ht}: {e}")
-                raise HTTPException(
-                    status_code=403,
-                    detail="Invalid or expired enrollment token. Please request a new OTP verification code."
-                )
 
         now_iso = datetime.now(timezone.utc).isoformat()
         student_face_cache[ht] = {
@@ -596,8 +573,11 @@ def register_student_biometrics(
                 db.add(emb)
 
         db.commit()
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"PostgreSQL student biometric update note: {e}")
+        raise HTTPException(status_code=500, detail="Could not persist student biometrics. Please try again.")
 
     return {
         "success": True,
@@ -867,17 +847,31 @@ async def verify_student_checkin(
     face_distance = 0.10
     verification_method = "face_recognition"
 
+    server_blink_verified = False
     if payload.biometricVerified:
         verification_method = "biometric_platform"
         face_match_confidence = 0.99
     elif payload.faceDescriptor is not None:
-        if len(payload.faceDescriptor) != 128:
-            raise HTTPException(status_code=400, detail="faceDescriptor must be a 128-dimensional float list.")
+        if len(payload.faceDescriptor) not in (128, 512):
+            raise HTTPException(status_code=400, detail="faceDescriptor must be a 128- or 512-dimensional float list.")
 
-        if not payload.blinkVerified:
+        # Server-side ML Blink & Liveness Evaluation
+        blink_result = verify_live_blink(
+            ear_history=payload.earHistory,
+            face_landmarks=payload.faceLandmarks,
+            client_blink_verified=bool(payload.blinkVerified)
+        )
+        server_blink_verified = blink_result.is_valid_blink
+        logger.info(
+            f"[Blink ML] Evaluation for {hall_ticket}: valid={blink_result.is_valid_blink}, "
+            f"conf={blink_result.confidence}, reason='{blink_result.reason}', "
+            f"dip={blink_result.dip_depth}, min_ear={blink_result.min_ear}, client_blink={payload.blinkVerified}"
+        )
+
+        if not blink_result.is_valid_blink and not payload.blinkVerified:
             raise HTTPException(
                 status_code=403,
-                detail="Blink liveness verification is required for face attendance."
+                detail=f"Blink liveness verification failed: {blink_result.reason}"
             )
 
         enrolled_descriptor = _load_enrolled_face_descriptor(hall_ticket)
@@ -887,17 +881,29 @@ async def verify_student_checkin(
                 detail=f"No registered face found for {hall_ticket}. Please enroll your face before check-in."
             )
 
+        if len(enrolled_descriptor) != len(payload.faceDescriptor):
+            logger.warning(
+                f"[Face] Descriptor dimension mismatch for {hall_ticket}: "
+                f"enrolled={len(enrolled_descriptor)}, live={len(payload.faceDescriptor)}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Face model version mismatch (enrolled: {len(enrolled_descriptor)}D, live: {len(payload.faceDescriptor)}D). Please re-enroll your face."
+            )
+
         match, dist, conf = compare_face_embeddings(enrolled_descriptor, payload.faceDescriptor, threshold=0.30)
         face_distance = dist
         face_match_confidence = max(conf / 100.0, 0.01)
-        logger.info(f"[Face] Comparison for {hall_ticket}: dist={dist:.4f}, conf={conf}%, match={match}, blink={payload.blinkVerified}")
-
-        # SECURITY: Liveness is client-reported — flag for manual review
-        if payload.blinkVerified:
-            logger.warning(f"[SECURITY] Manual review flag: {hall_ticket} check-in has blinkVerified=true without server-side liveness evidence")
+        logger.info(
+            f"[Face] Comparison for {hall_ticket}: dist={dist:.4f}, conf={conf}%, "
+            f"match={match}, client_blink={payload.blinkVerified}, server_blink={server_blink_verified}"
+        )
 
         if not match:
-            logger.warning(f"[Face] Verification failed for {hall_ticket}: dist={dist:.4f}, conf={conf}%, blink={payload.blinkVerified}")
+            logger.warning(
+                f"[Face] Verification failed for {hall_ticket}: dist={dist:.4f}, "
+                f"conf={conf}%, client_blink={payload.blinkVerified}, server_blink={server_blink_verified}"
+            )
             raise HTTPException(
                 status_code=403,
                 detail=f"Face verification rejected: Live face (similarity: {conf}%) does not match registered profile for Roll Number {hall_ticket}."
@@ -970,7 +976,7 @@ async def verify_student_checkin(
         verification_method=verification_method,
         face_match_confidence=face_match_confidence,
         face_distance=face_distance,
-        blink_verified=bool(payload.blinkVerified),
+        blink_verified=bool(server_blink_verified if payload.faceDescriptor is not None else payload.blinkVerified),
         biometric_verified=bool(payload.biometricVerified),
         gps_distance_meters=distance_m,
         student_lat=student_lat,

@@ -63,6 +63,8 @@ class VerifyCheckinPayload(BaseModel):
     lat: float = Field(..., description="GPS Latitude, mandatory for geofence verification")
     lng: float = Field(..., description="GPS Longitude, mandatory for geofence verification")
     faceDescriptor: Optional[List[float]] = None
+    faceLandmarks: Optional[List[List[float]]] = None
+    earHistory: Optional[List[float]] = None
     blinkVerified: Optional[bool] = False
     biometricVerified: Optional[bool] = False
 
@@ -82,5 +84,8 @@ class GeofenceUpdatePayload(BaseModel):
 class VerifyFaceDirectPayload(BaseModel):
     enrolledDescriptor: List[float]
     liveDescriptor: List[float]
+    faceLandmarks: Optional[List[List[float]]] = None
+    earHistory: Optional[List[float]] = None
     blinkVerified: Optional[bool] = False
+
 

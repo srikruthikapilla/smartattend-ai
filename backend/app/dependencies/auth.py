@@ -22,13 +22,13 @@ def get_current_user(
     token = None
     
     # Try Authorization header first (backward compatibility)
-    if credentials:
+    if credentials and hasattr(credentials, "credentials") and credentials.credentials:
         token = credentials.credentials
-    elif authorization and authorization.startswith("Bearer "):
+    elif authorization and isinstance(authorization, str) and authorization.startswith("Bearer "):
         token = authorization.split(" ", 1)[1].strip()
     
     # Fall back to cookie
-    if not token:
+    if not token and hasattr(request, "cookies"):
         token = request.cookies.get(COOKIE_NAME)
 
     if not token:
@@ -77,13 +77,14 @@ def get_current_user(
     }
 
 def get_optional_current_user(
+    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Security(security_scheme),
     authorization: Optional[str] = Header(None)
 ) -> Optional[Dict[str, Any]]:
     """Returns the authenticated user dict if valid token is provided, else None."""
     try:
-        return get_current_user(credentials, authorization)
-    except HTTPException:
+        return get_current_user(request, credentials, authorization)
+    except Exception:
         return None
 
 def require_role(allowed_roles: Union[str, List[str]]):

@@ -11,6 +11,7 @@ import {
   captureEnrollmentDescriptor,
   calculateFaceDistance,
   calculateConfidencePct,
+  extractLandmarkPoints,
   type EnrollmentProgress
 } from '../utils/faceRecognition';
 import { enrollPlatformBiometrics, verifyPlatformBiometrics } from '../utils/webauthnBiometrics';
@@ -18,7 +19,7 @@ import {
   QrCode, MapPin, ScanFace, Eye, CheckCircle2, AlertTriangle,
   Sparkles, Fingerprint, RefreshCw, ArrowRight, User,
   Search, BarChart3, GraduationCap, Calendar, Clock, BookOpen,
-  AlertCircle, Sun, Moon, Shield, Check, UserCheck, Camera
+  AlertCircle, Sun, Moon, Check, UserCheck, Camera
 } from 'lucide-react';
 
 /**
@@ -109,6 +110,7 @@ export const PublicCheckin: React.FC = () => {
     setIsShakeActive(false);
     setScanAttempts(0);
     setLiveMatchStatus({ isMatch: false, distance: 1, confidencePct: 0, checked: false });
+    setEnrollFaceError('');
     if (blinkDetectorRef.current) {
       blinkDetectorRef.current.reset();
     }
@@ -197,9 +199,14 @@ export const PublicCheckin: React.FC = () => {
 
       const enrolledVector = data.faceDescriptor || data.profile?.faceDescriptor;
       const hasValidVector = enrolledVector && Array.isArray(enrolledVector) && (enrolledVector.length === 128 || enrolledVector.length === 512);
+      const isEnrolledOnServer = Boolean(data.isFaceEnrolled || data.profile?.faceEnrolled);
 
-      if (hasValidVector) {
-        setEnrolledFaceDescriptor(enrolledVector);
+      if (hasValidVector || isEnrolledOnServer) {
+        if (hasValidVector) {
+          setEnrolledFaceDescriptor(enrolledVector);
+        } else {
+          setEnrolledFaceDescriptor(null); // Backend will verify authoritatively
+        }
         if (data.profile?.name) setStudentName(data.profile.name);
         setStep('location_check');
         verifyLocation();
@@ -223,6 +230,28 @@ export const PublicCheckin: React.FC = () => {
 
   // face enrollment error state
   const [enrollFaceError, setEnrollFaceError] = useState<string>('');
+
+  const persistFaceEnrollment = async (descriptor: number[]) => {
+    const resp = await fetch('/api/student/register-biometrics', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        hallTicketNo: hallTicket,
+        name: studentName || `Student (${hallTicket})`,
+        branch: studentBranch,
+        section: 'A',
+        faceDescriptor: descriptor,
+        biometricCredentialId: enrolledBioCredentialId || null
+      })
+    });
+    const data = await safeJson(resp);
+
+    if (!resp.ok || data.success === false) {
+      throw new Error(data.detail || data.message || 'Face profile could not be saved. Please try again.');
+    }
+
+    return data;
+  };
 
   // 4. Auto-start phone-style face enrollment when on enrollment step
   useEffect(() => {
@@ -265,23 +294,22 @@ export const PublicCheckin: React.FC = () => {
           message: 'Face registered! Starting attendance scan...'
         });
 
-        // 1. Instantly save permanently to PostgreSQL database!
+        // 1. Save permanently to PostgreSQL database before attendance scan.
         try {
-          await fetch('/api/student/register-biometrics', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              hallTicketNo: hallTicket,
-              name: studentName || `Student (${hallTicket})`,
-              branch: studentBranch,
-              section: 'A',
-              faceDescriptor: descriptor,
-              biometricCredentialId: 'bio_auto_registered'
-            })
-          });
+          await persistFaceEnrollment(descriptor);
           localStorage.setItem(`enrolled_${hallTicket}`, 'true');
         } catch (saveErr) {
           console.warn('Auto biometric save error:', saveErr);
+          enrollmentStartedRef.current = false;
+          setEnrollFaceError(saveErr instanceof Error ? saveErr.message : 'Face profile could not be saved. Please try again.');
+          setEnrollProgress({
+            framesCollected: 0,
+            totalFrames: 8,
+            pct: 0,
+            status: 'error',
+            message: 'Registration save failed'
+          });
+          return;
         }
 
         // 2. Automatically advance DIRECTLY to live attendance detection!
@@ -415,14 +443,15 @@ export const PublicCheckin: React.FC = () => {
 
           // Calculate real-time face distance if enrolled descriptor is available (Calibrated 0.30 threshold)
           let isCurrentFaceMatch = false;
+          const isVerifyingOnServer = !enrolledFaceDescriptor;
           if (enrolledFaceDescriptor && enrolledFaceDescriptor.length === 128) {
             const dist = calculateFaceDistance(enrolledFaceDescriptor, detection.descriptor);
             const conf = calculateConfidencePct(dist, 0.30);
             isCurrentFaceMatch = dist <= 0.30;
             setLiveMatchStatus({ isMatch: isCurrentFaceMatch, distance: Number(dist.toFixed(3)), confidencePct: conf, checked: true });
           } else {
-            // Fail-closed: Never default to match: true if enrolled descriptor is missing
-            setLiveMatchStatus({ isMatch: false, distance: 1.0, confidencePct: 0, checked: true });
+            // Server-side verification mode: descriptor will be checked securely by backend
+            setLiveMatchStatus({ isMatch: true, distance: 0, confidencePct: 100, checked: false });
           }
 
           if (detection.landmarks) {
@@ -433,16 +462,18 @@ export const PublicCheckin: React.FC = () => {
             if (hasBlinked) {
               setBlinkDetected(true);
               
-              // STRICT GATE: Must be a verified face match before recording attendance
-              if (isCurrentFaceMatch) {
+              // Proceed to server verification when face is matched or authoritative check is on backend
+              if (isCurrentFaceMatch || isVerifyingOnServer) {
                 setBlinkAlertNotice(null);
                 setLivenessStatus('Identity & Liveness verified — recording attendance...');
                 submitted = true;
                 clearInterval(interval);
-                handleFinalVerification(detection.descriptor, true);
+                const landmarkPoints = extractLandmarkPoints(detection.landmarks);
+                const earHistory = detector.getEarHistory();
+                handleFinalVerification(detection.descriptor, true, landmarkPoints, earHistory);
                 return;
               } else {
-                // DIRECTLY transition to error screen with face mismatch message
+                // Local enrolled descriptor exists and does not match
                 submitted = true;
                 clearInterval(interval);
                 setStep('error');
@@ -450,12 +481,24 @@ export const PublicCheckin: React.FC = () => {
                 return;
               }
             } else if (isClosed) {
-              setLivenessStatus(isCurrentFaceMatch ? 'Blink detected — reopen eyes to complete' : 'Face mismatch — live face does not match enrolled profile');
+              setLivenessStatus(
+                isVerifyingOnServer || isCurrentFaceMatch
+                  ? 'Blink detected — reopen eyes to complete'
+                  : 'Face mismatch — live face does not match enrolled profile'
+              );
             } else {
-              setLivenessStatus(isCurrentFaceMatch ? 'Face verified — blink naturally once to confirm' : 'Face mismatch — live face does not match enrolled profile');
+              setLivenessStatus(
+                isVerifyingOnServer || isCurrentFaceMatch
+                  ? 'Face verified — blink naturally once to confirm'
+                  : 'Face mismatch — live face does not match enrolled profile'
+              );
             }
           } else {
-            setLivenessStatus(isCurrentFaceMatch ? 'Face detected — ready to confirm' : 'Face mismatch');
+            setLivenessStatus(
+              isVerifyingOnServer || isCurrentFaceMatch
+                ? 'Face detected — ready to confirm'
+                : 'Face mismatch'
+            );
           }
         } else {
           setFaceDetectedInFrame(false);
@@ -476,6 +519,8 @@ export const PublicCheckin: React.FC = () => {
   const handleFinalVerification = async (
     faceDescriptor: number[],
     isBlinkVerified: boolean,
+    faceLandmarks?: number[][],
+    earHistory?: number[],
     isBiometricFallback: boolean = false
   ) => {
     if (!isBiometricFallback && !isBlinkVerified) {
@@ -483,14 +528,8 @@ export const PublicCheckin: React.FC = () => {
       return;
     }
 
-    if (!isBiometricFallback) {
-      // HARD-FAIL: Never skip face verification — reject if enrolled descriptor is missing
-      if (!enrolledFaceDescriptor || enrolledFaceDescriptor.length !== 128) {
-        setStep('error');
-        setErrorMessage(`Could not load biometric profile for ${hallTicket}. Please re-enroll your face.`);
-        return;
-      }
-
+    // If locally cached enrolled descriptor is present, perform client-side pre-check
+    if (!isBiometricFallback && enrolledFaceDescriptor && enrolledFaceDescriptor.length === 128) {
       const dist = calculateFaceDistance(enrolledFaceDescriptor, faceDescriptor);
       if (dist > 0.30) {
         const conf = calculateConfidencePct(dist, 0.30);
@@ -515,6 +554,8 @@ export const PublicCheckin: React.FC = () => {
         lat: currentCoords.lat,
         lng: currentCoords.lng,
         faceDescriptor,
+        faceLandmarks: faceLandmarks || null,
+        earHistory: earHistory || null,
         blinkVerified: isBlinkVerified,
         biometricVerified: isBiometricFallback,
         studentName: studentName || `Student (${hallTicket})`
@@ -553,7 +594,7 @@ export const PublicCheckin: React.FC = () => {
       const result = await verifyPlatformBiometrics();
       if (result.success) {
         const dummyDescriptor = Array(128).fill(0.05);
-        await handleFinalVerification(dummyDescriptor, false, true);
+        await handleFinalVerification(dummyDescriptor, false, undefined, undefined, true);
       } else {
         alert('Device biometric authentication was cancelled or failed.');
       }
@@ -1058,6 +1099,11 @@ export const PublicCheckin: React.FC = () => {
                     }`}>
                       <span className={`w-2 h-2 rounded-full ${liveMatchStatus.isMatch ? 'bg-emerald-500' : 'bg-rose-500 animate-ping'}`} />
                       <span>{liveMatchStatus.isMatch ? `Face Matched (${liveMatchStatus.confidencePct}%) ✓` : `⚠️ Mismatch (${liveMatchStatus.confidencePct}% Match)`}</span>
+                    </div>
+                  ) : faceDetectedInFrame ? (
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border font-bold text-[11px] bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20">
+                      <span className="w-2 h-2 rounded-full bg-teal-500" />
+                      <span>Face Detected ✓</span>
                     </div>
                   ) : null}
 

@@ -19,7 +19,15 @@ CORS_ORIGINS_RAW = os.getenv("CORS_ORIGINS", CORS_ORIGIN)
 CORS_ORIGINS = [orig.strip() for orig in CORS_ORIGINS_RAW.split(",") if orig.strip()]
 
 # Database configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgrespassword@localhost:5432/smartattend")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    db_user = os.getenv("POSTGRES_USER", "postgres")
+    db_pass = os.getenv("POSTGRES_PASSWORD", "postgrespassword")
+    db_host = os.getenv("POSTGRES_HOST", "postgres" if os.path.exists("/.dockerenv") else "localhost")
+    db_port = os.getenv("POSTGRES_PORT", "5432")
+    db_name = os.getenv("POSTGRES_DB", "smartattend")
+    DATABASE_URL = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
+
 if not os.path.exists("/.dockerenv") and "@postgres:" in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.replace("@postgres:", "@localhost:")
 

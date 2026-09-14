@@ -1,4 +1,4 @@
-﻿import React, {
+import React, {
   createContext,
   useContext,
   useEffect,
@@ -167,39 +167,41 @@ export const AuthProvider: React.FC<{
 
   const [currentUser, setCurrentUser] =
     useState<UserProfile | null>(() => {
-      // User session is now managed via httpOnly cookies on the backend
-      // We'll fetch the current user on mount to restore session
-      return null;
+      try {
+        const cached = localStorage.getItem('sbit_user');
+        return cached ? JSON.parse(cached) : null;
+      } catch {
+        return null;
+      }
     });
 
+  const getAuthHeaders = (): Record<string, string> => {
+    const token = localStorage.getItem('sbit_auth_token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
+  };
+
+  // Restore session from backend on mount
   useEffect(() => {
-    // Users are now managed on the backend, no localStorage needed
-  }, [users]);
-
-  useEffect(() => {
-    // Current user is now managed via httpOnly cookies on the backend
-    // No localStorage needed for user state
-  }, [currentUser]);
-
-  // Synchronization with backend PostgreSQL users table
-  const refreshUsers = async (): Promise<void> => {
-    // Token is now in httpOnly cookie, no localStorage needed
-    const endpoints = [
-      '/api/auth/users',
-      '/api/auth/users',
-      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/users`
-    ].filter(Boolean);
-
-    for (const ep of endpoints) {
+    const restoreSession = async () => {
       try {
-        const res = await fetch(ep, {
-          credentials: 'include' // Include httpOnly cookie
+        const token = localStorage.getItem('sbit_auth_token');
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        const res = await fetch('/api/auth/me', {
+          headers,
+          credentials: 'include'
         });
         if (res.ok) {
           const data = await res.json();
-          if (data.success && Array.isArray(data.users)) {
-            const mapped: UserProfile[] = data.users.map((u: any) => ({
-              uid: u.id,
+          if (data.success && data.user) {
+            const u = data.user;
+            const userProfile: UserProfile = {
+              uid: u.id || u.uid,
               email: u.email,
               name: u.name,
               phone: u.phone || undefined,
@@ -217,17 +219,57 @@ export const AuthProvider: React.FC<{
               faceDescriptor: u.face_descriptor || undefined,
               faceEnrollmentStatus: u.face_enrollment_status || 'pending',
               status: u.status || 'approved',
-              createdAt: u.created_at || new Date().toISOString()
-            }));
-
-            setUsers(mapped);
-            localStorage.setItem("sbit_users", JSON.stringify(mapped));
-            break;
+              createdAt: u.created_at || u.createdAt || new Date().toISOString()
+            };
+            setCurrentUser(userProfile);
+            localStorage.setItem('sbit_user', JSON.stringify(userProfile));
           }
         }
       } catch (e) {
-        // Try next endpoint
+        // Not authenticated
       }
+    };
+    restoreSession();
+  }, []);
+
+  // Synchronization with backend PostgreSQL users table
+  const refreshUsers = async (): Promise<void> => {
+    try {
+      const res = await fetch('/api/auth/users', {
+        headers: getAuthHeaders(),
+        credentials: 'include'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.users)) {
+          const mapped: UserProfile[] = data.users.map((u: any) => ({
+            uid: u.id,
+            email: u.email,
+            name: u.name,
+            phone: u.phone || undefined,
+            role: (u.role || 'student') as any,
+            college: u.college || SBIT_COLLEGE_NAME,
+            department: u.department || undefined,
+            designation: u.designation || undefined,
+            assignedBranch: u.assigned_branch || undefined,
+            assignedSections: u.assigned_sections || [],
+            hallTicketNo: u.hall_ticket_no || undefined,
+            branch: u.branch || undefined,
+            section: u.section || undefined,
+            year: u.year ? String(u.year) : undefined,
+            semester: u.semester ? String(u.semester) : undefined,
+            faceDescriptor: u.face_descriptor || undefined,
+            faceEnrollmentStatus: u.face_enrollment_status || 'pending',
+            status: u.status || 'approved',
+            createdAt: u.created_at || new Date().toISOString()
+          }));
+
+          setUsers(mapped);
+          localStorage.setItem("sbit_users", JSON.stringify(mapped));
+        }
+      }
+    } catch (e) {
+      // ignore
     }
   };
 
@@ -241,69 +283,70 @@ export const AuthProvider: React.FC<{
     role?: string
   ): Promise<boolean> => {
     const cleanEmail = email.trim().toLowerCase();
-    let lastError: string | null = null;
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email: cleanEmail, password, role })
+    });
 
-    const backendEndpoints = [
-      '/api/auth/login',
-      '/api/auth/login',
-      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/login`
-    ].filter(Boolean);
-
-    for (const ep of backendEndpoints) {
-      try {
-        const response = await fetch(ep, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ email: cleanEmail, password, role })
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.user) {
-            // Token is now set as httpOnly cookie by backend
-            // No localStorage storage needed
-            const backendUser: UserProfile = data.user;
-            setUsers(prev => {
-              const exists = prev.some(u => u.uid === backendUser.uid || u.email === backendUser.email);
-              return exists ? prev.map(u => u.email === backendUser.email ? backendUser : u) : [backendUser, ...prev];
-            });
-            setCurrentUser(backendUser);
-            return true;
-          }
-        } else {
-          const errJson = await response.json().catch(() => ({}));
-          if (errJson.detail) {
-            lastError = errJson.detail;
-            if (response.status === 401 || response.status === 403 || response.status === 404) {
-              break;
-            }
-          }
+    if (response.ok) {
+      const data = await response.json();
+      if (data.success && data.user) {
+        const token = data.token || data.access_token;
+        if (token) {
+          localStorage.setItem('sbit_auth_token', token);
         }
-      } catch (backendError) {
-        console.warn(`Backend auth endpoint ${ep} note:`, backendError);
+        const u = data.user;
+        const backendUser: UserProfile = {
+          uid: u.id || u.uid,
+          email: u.email,
+          name: u.name,
+          phone: u.phone || undefined,
+          role: (u.role || 'student') as any,
+          college: u.college || SBIT_COLLEGE_NAME,
+          department: u.department || undefined,
+          designation: u.designation || undefined,
+          assignedBranch: u.assigned_branch || undefined,
+          assignedSections: u.assigned_sections || [],
+          hallTicketNo: u.hall_ticket_no || undefined,
+          branch: u.branch || undefined,
+          section: u.section || undefined,
+          year: u.year ? String(u.year) : undefined,
+          semester: u.semester ? String(u.semester) : undefined,
+          faceDescriptor: u.face_descriptor || undefined,
+          faceEnrollmentStatus: u.face_enrollment_status || 'pending',
+          status: u.status || 'approved',
+          createdAt: u.created_at || u.createdAt || new Date().toISOString()
+        };
+        localStorage.setItem('sbit_user', JSON.stringify(backendUser));
+        setUsers(prev => {
+          const exists = prev.some(usr => usr.uid === backendUser.uid || usr.email === backendUser.email);
+          return exists ? prev.map(usr => usr.email === backendUser.email ? backendUser : usr) : [backendUser, ...prev];
+        });
+        setCurrentUser(backendUser);
+        return true;
       }
-    }
-
-    if (lastError) {
-      throw new Error(lastError);
+    } else {
+      const errJson = await response.json().catch(() => ({}));
+      throw new Error(errJson.detail || `Authentication failed (${response.status})`);
     }
 
     throw new Error("Unable to authenticate. Please verify your credentials.");
   };
 
   const logout = async () => {
-    // Call backend logout to clear httpOnly cookie
     try {
       await fetch('/api/auth/logout', {
         method: 'POST',
-        credentials: 'include' // Important: include cookies
+        credentials: 'include'
       });
     } catch (err) {
       console.warn('Backend logout note:', err);
     }
     
-    // Clear local state
+    localStorage.removeItem('sbit_auth_token');
+    localStorage.removeItem('sbit_user');
     setCurrentUser(null);
     setUsers([]);
   };
@@ -312,34 +355,22 @@ export const AuthProvider: React.FC<{
     email: string
   ): Promise<{ success: boolean; message: string }> => {
     const cleanEmail = email.trim().toLowerCase();
-    const endpoints = [
-      '/api/auth/request-reset',
-      '/api/auth/request-reset',
-      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/request-reset`
-    ].filter(Boolean);
+    const response = await fetch('/api/auth/request-reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email: cleanEmail })
+    });
 
-    for (const ep of endpoints) {
-      try {
-        const response = await fetch(ep, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ email: cleanEmail })
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          return {
-            success: true,
-            message: data.message || "Verification code sent to your email."
-          };
-        }
-      } catch (err) {
-        console.warn(`Backend request-reset ${ep} notice:`, err);
-      }
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) {
+      return {
+        success: true,
+        message: data.message || "Verification code sent to your email."
+      };
     }
 
-    throw new Error("Unable to reach authentication server. Please try again.");
+    throw new Error(data.detail || "Unable to reach authentication server. Please try again.");
   };
 
   const resetPasswordWithCode = async (
@@ -348,42 +379,26 @@ export const AuthProvider: React.FC<{
     newPassword: string
   ): Promise<{ success: boolean; message: string }> => {
     const cleanEmail = email.trim().toLowerCase();
-    const endpoints = [
-      '/api/auth/reset-password',
-      '/api/auth/reset-password',
-      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/reset-password`
-    ].filter(Boolean);
+    const response = await fetch('/api/auth/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        email: cleanEmail,
+        otp,
+        new_password: newPassword
+      })
+    });
 
-    for (const ep of endpoints) {
-      try {
-        const response = await fetch(ep, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            email: cleanEmail,
-            otp,
-            new_password: newPassword
-          })
-        });
-
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data.detail || "Failed to reset password.");
-        }
-
-        return {
-          success: true,
-          message: data.message || "Password successfully updated!"
-        };
-      } catch (err: any) {
-        if (err.message && !err.message.includes('Failed to fetch')) {
-          throw err;
-        }
-      }
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.detail || "Failed to reset password.");
     }
 
-    throw new Error("Unable to reach authentication server. Please try again.");
+    return {
+      success: true,
+      message: data.message || "Password successfully updated!"
+    };
   };
 
   const registerAdmin = async (
@@ -398,82 +413,43 @@ export const AuthProvider: React.FC<{
       throw new Error("Password must be at least 4 characters long.");
     }
 
-    // Token is now in httpOnly cookie
-    const endpoints = [
-      '/api/auth/register',
-      '/api/auth/register',
-      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/register`
-    ].filter(Boolean);
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({
+        email: cleanEmail,
+        password: password,
+        name: data.name.trim(),
+        phone: data.phone || null,
+        role: 'admin',
+        college: data.college || SBIT_COLLEGE_NAME,
+        designation: data.designation || 'System Administrator',
+        department: data.department || null,
+        status: 'approved'
+      })
+    });
 
-    let registeredUser: UserProfile | null = null;
-    let lastError = "Unable to connect to registration server.";
-
-    for (const ep of endpoints) {
-      try {
-        const headers: Record<string, string> = {
-          'Content-Type': 'application/json'
-        };
-        // No Authorization header needed - httpOnly cookie is used
-
-        const res = await fetch(ep, {
-          method: 'POST',
-          headers,
-          credentials: 'include',
-          body: JSON.stringify({
-            email: cleanEmail,
-            password: password,
-            name: data.name.trim(),
-            phone: data.phone || null,
-            role: 'admin',
-            college: data.college || SBIT_COLLEGE_NAME,
-            designation: data.designation || 'System Administrator',
-            department: data.department || null,
-            status: 'approved'
-          })
-        });
-
-        if (res.ok) {
-          const resData = await res.json();
-          const serverUser = resData.user || {};
-          registeredUser = {
-            ...data,
-            uid: serverUser.id || crypto.randomUUID(),
-            email: serverUser.email || cleanEmail,
-            name: serverUser.name || data.name.trim(),
-            role: 'admin',
-            college: serverUser.college || data.college || SBIT_COLLEGE_NAME,
-            designation: serverUser.designation || data.designation || 'System Administrator',
-            status: 'approved',
-            createdAt: serverUser.createdAt || new Date().toISOString()
-          };
-          break;
-        } else {
-          const errData = await res.json().catch(() => ({}));
-          const errMsg = errData.detail || `Server error (${res.status})`;
-          if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 409) {
-            throw new Error(errMsg);
-          }
-          lastError = errMsg;
-        }
-      } catch (err: any) {
-        if (err.message && (
-          err.message.includes('Administrator') ||
-          err.message.includes('Password') ||
-          err.message.includes('already exists') ||
-          err.message.includes('Server error')
-        )) {
-          throw err;
-        }
-        lastError = err.message || lastError;
-      }
+    if (res.ok) {
+      const resData = await res.json();
+      const serverUser = resData.user || {};
+      const registeredUser: UserProfile = {
+        ...data,
+        uid: serverUser.id || crypto.randomUUID(),
+        email: serverUser.email || cleanEmail,
+        name: serverUser.name || data.name.trim(),
+        role: 'admin',
+        college: serverUser.college || data.college || SBIT_COLLEGE_NAME,
+        designation: serverUser.designation || data.designation || 'System Administrator',
+        status: 'approved',
+        createdAt: serverUser.createdAt || new Date().toISOString()
+      };
+      await refreshUsers();
+      return registeredUser;
+    } else {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `Server error (${res.status})`);
     }
-
-    if (!registeredUser) {
-      throw new Error(lastError);
-    }
-
-    await refreshUsers();
-    return registeredUser;
   };
 
   const registerFaculty = async (
@@ -488,85 +464,46 @@ export const AuthProvider: React.FC<{
       throw new Error("Password must be at least 4 characters long.");
     }
 
-    // Token is now in httpOnly cookie
-    const endpoints = [
-      '/api/auth/register',
-      '/api/auth/register',
-      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/register`
-    ].filter(Boolean);
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({
+        email: cleanEmail,
+        password: password,
+        name: data.name.trim(),
+        phone: data.phone || null,
+        role: 'faculty',
+        college: data.college || SBIT_COLLEGE_NAME,
+        designation: data.designation || 'Assistant Professor',
+        department: data.department || 'Computer Science & Engineering',
+        assigned_branch: data.assignedBranch || 'CSE',
+        assigned_sections: data.assignedSections || ['A', 'B'],
+        status: 'approved'
+      })
+    });
 
-    let registeredUser: UserProfile | null = null;
-    let lastError = "Unable to connect to registration server.";
-
-    for (const ep of endpoints) {
-      try {
-        const headers: Record<string, string> = {
-          'Content-Type': 'application/json'
-        };
-        // No Authorization header needed - httpOnly cookie is used
-
-        const res = await fetch(ep, {
-          method: 'POST',
-          headers,
-          credentials: 'include',
-          body: JSON.stringify({
-            email: cleanEmail,
-            password: password,
-            name: data.name.trim(),
-            phone: data.phone || null,
-            role: 'faculty',
-            college: data.college || SBIT_COLLEGE_NAME,
-            designation: data.designation || 'Assistant Professor',
-            department: data.department || 'Computer Science & Engineering',
-            assigned_branch: data.assignedBranch || 'CSE',
-            assigned_sections: data.assignedSections || ['A', 'B'],
-            status: 'approved'
-          })
-        });
-
-        if (res.ok) {
-          const resData = await res.json();
-          const serverUser = resData.user || {};
-          registeredUser = {
-            ...data,
-            uid: serverUser.id || crypto.randomUUID(),
-            email: serverUser.email || cleanEmail,
-            name: serverUser.name || data.name.trim(),
-            role: 'faculty',
-            college: serverUser.college || data.college || SBIT_COLLEGE_NAME,
-            designation: serverUser.designation || data.designation || 'Assistant Professor',
-            department: serverUser.department || data.department || 'Computer Science & Engineering',
-            status: 'approved',
-            createdAt: serverUser.createdAt || new Date().toISOString()
-          };
-          break;
-        } else {
-          const errData = await res.json().catch(() => ({}));
-          const errMsg = errData.detail || `Server error (${res.status})`;
-          if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 409) {
-            throw new Error(errMsg);
-          }
-          lastError = errMsg;
-        }
-      } catch (err: any) {
-        if (err.message && (
-          err.message.includes('Administrator') ||
-          err.message.includes('Password') ||
-          err.message.includes('already exists') ||
-          err.message.includes('Server error')
-        )) {
-          throw err;
-        }
-        lastError = err.message || lastError;
-      }
+    if (res.ok) {
+      const resData = await res.json();
+      const serverUser = resData.user || {};
+      const registeredUser: UserProfile = {
+        ...data,
+        uid: serverUser.id || crypto.randomUUID(),
+        email: serverUser.email || cleanEmail,
+        name: serverUser.name || data.name.trim(),
+        role: 'faculty',
+        college: serverUser.college || data.college || SBIT_COLLEGE_NAME,
+        designation: serverUser.designation || data.designation || 'Assistant Professor',
+        department: serverUser.department || data.department || 'Computer Science & Engineering',
+        status: 'approved',
+        createdAt: serverUser.createdAt || new Date().toISOString()
+      };
+      await refreshUsers();
+      return registeredUser;
+    } else {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `Server error (${res.status})`);
     }
-
-    if (!registeredUser) {
-      throw new Error(lastError);
-    }
-
-    await refreshUsers();
-    return registeredUser;
   };
 
   const registerStudent = async (
@@ -837,58 +774,27 @@ export const AuthProvider: React.FC<{
     });
 
     if (newFacultyToAdd.length > 0) {
-      const token = localStorage.getItem('sbit_auth_token');
-      const endpoints = [
-        '/api/auth/faculty/bulk',
-        '/api/auth/faculty/bulk',
-        `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/faculty/bulk`
-      ].filter(Boolean);
+      const res = await fetch('/api/auth/faculty/bulk', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({
+          faculty: newFacultyToAdd.map(f => ({
+            name: f.name,
+            email: f.email,
+            phone: f.phone || null,
+            department: f.department,
+            designation: f.designation,
+            assigned_branch: f.assignedBranch,
+            assigned_sections: f.assignedSections,
+            status: f.status
+          }))
+        })
+      });
 
-      let saved = false;
-      let lastError = 'Failed to bulk import faculty records.';
-
-      for (const ep of endpoints) {
-        try {
-          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-          // No Authorization header needed - httpOnly cookie is used
-
-          const res = await fetch(ep, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-              faculty: newFacultyToAdd.map(f => ({
-                name: f.name,
-                email: f.email,
-                phone: f.phone || null,
-                department: f.department,
-                designation: f.designation,
-                assigned_branch: f.assignedBranch,
-                assigned_sections: f.assignedSections,
-                status: f.status
-              }))
-            })
-          });
-
-          if (res.ok) {
-            saved = true;
-            break;
-          } else {
-            const errJson = await res.json().catch(() => ({}));
-            lastError = errJson.detail || `Server error (${res.status})`;
-            if (res.status === 400 || res.status === 401 || res.status === 403) {
-              throw new Error(lastError);
-            }
-          }
-        } catch (e: any) {
-          if (e.message && (e.message.includes('Only') || e.message.includes('Administrator') || e.message.includes('Server error'))) {
-            throw e;
-          }
-          lastError = e.message || lastError;
-        }
-      }
-
-      if (!saved) {
-        throw new Error(lastError);
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `Server error (${res.status})`);
       }
 
       await refreshUsers();
@@ -929,113 +835,46 @@ export const AuthProvider: React.FC<{
     uid: string,
     updates: Partial<UserProfile>
   ) => {
-    // Token is now in httpOnly cookie
-    const endpoints = [
-      `/api/auth/users/${encodeURIComponent(uid)}`,
-      `/api/auth/users/${encodeURIComponent(uid)}`,
-      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/users/${encodeURIComponent(uid)}`
-    ].filter(Boolean);
+    const res = await fetch(`/api/auth/users/${encodeURIComponent(uid)}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({
+        name: updates.name,
+        phone: updates.phone,
+        role: updates.role,
+        status: updates.status,
+        designation: updates.designation,
+        department: updates.department,
+        assigned_branch: updates.assignedBranch,
+        assigned_sections: updates.assignedSections,
+        hall_ticket_no: updates.hallTicketNo,
+        branch: updates.branch,
+        section: updates.section,
+        year: updates.year,
+        semester: updates.semester,
+        college: updates.college
+      })
+    });
 
-    let updated = false;
-    let lastError = 'Failed to update user profile.';
-
-    for (const ep of endpoints) {
-      try {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        // No Authorization header needed - httpOnly cookie is used
-
-        const res = await fetch(ep, {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify({
-            name: updates.name,
-            phone: updates.phone,
-            role: updates.role,
-            status: updates.status,
-            designation: updates.designation,
-            department: updates.department,
-            assigned_branch: updates.assignedBranch,
-            assigned_sections: updates.assignedSections,
-            hall_ticket_no: updates.hallTicketNo,
-            branch: updates.branch,
-            section: updates.section,
-            year: updates.year,
-            semester: updates.semester,
-            college: updates.college
-          })
-        });
-
-        if (res.ok) {
-          updated = true;
-          break;
-        } else {
-          const errData = await res.json().catch(() => ({}));
-          lastError = errData.detail || `Server error (${res.status})`;
-          if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 404) {
-            throw new Error(lastError);
-          }
-        }
-      } catch (err: any) {
-        if (err.message && (err.message.includes('Access denied') || err.message.includes('User') || err.message.includes('Server error'))) {
-          throw err;
-        }
-        lastError = err.message || lastError;
-      }
-    }
-
-    if (!updated) {
-      throw new Error(lastError);
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `Server error (${res.status})`);
     }
 
     await refreshUsers();
   };
 
   const deleteUser = async (uid: string): Promise<void> => {
-    // Token is now in httpOnly cookie
-    const endpoints = [
-      `/api/auth/users/${encodeURIComponent(uid)}`,
-      `/api/auth/users/${encodeURIComponent(uid)}`,
-      `${(import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')}/auth/users/${encodeURIComponent(uid)}`
-    ].filter(Boolean);
+    const res = await fetch(`/api/auth/users/${encodeURIComponent(uid)}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+      credentials: 'include'
+    });
 
-    let deleted = false;
-    let lastError = "Failed to delete user.";
-
-    for (const ep of endpoints) {
-      try {
-        const headers: Record<string, string> = {};
-        // No Authorization header needed - httpOnly cookie is used
-
-        const res = await fetch(ep, {
-          method: 'DELETE',
-          headers
-        });
-
-        if (res.ok) {
-          deleted = true;
-          break;
-        } else {
-          const data = await res.json().catch(() => ({}));
-          lastError = data.detail || (res.status === 502 ? "Server gateway unreachable. Please retry in a few seconds." : `Server error (${res.status})`);
-          if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 404) {
-            throw new Error(lastError);
-          }
-        }
-      } catch (err: any) {
-        if (err.message && (
-          err.message.includes('Cannot delete') ||
-          err.message.includes('Access denied') ||
-          err.message.includes('User') ||
-          err.message.includes('Server')
-        )) {
-          throw err;
-        }
-        lastError = err.message || lastError;
-      }
-    }
-
-    if (!deleted) {
-      throw new Error(lastError);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || (res.status === 502 ? "Server gateway unreachable. Please retry in a few seconds." : `Server error (${res.status})`));
     }
 
     setUsers(prev => prev.filter(user => user.uid !== uid && user.email.toLowerCase() !== uid.toLowerCase()));
