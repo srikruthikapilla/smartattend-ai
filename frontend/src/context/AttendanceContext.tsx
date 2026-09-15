@@ -217,6 +217,9 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           const sessJson = await sessRes.json();
           if (sessJson.active && sessJson.session) {
             const s = sessJson.session;
+            const origin = window.location.origin;
+            const activeTok = s.raw_token || s.token || s.sessionId || '';
+            const fullUrl = `${origin}/checkin?token=${activeTok}`;
             setActiveSession({
               sessionId: s.sessionId,
               sessionTitle: s.sessionTitle,
@@ -229,10 +232,14 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               startTime: s.createdAt || new Date().toISOString(),
               endTime: new Date(Date.now() + (sessJson.secondsRemaining || 120) * 1000).toISOString(),
               status: "active",
-              qrToken: s.token || s.raw_token || '',
+              qrToken: fullUrl,
               radiusMeters: s.radius_meters || 150
             });
-            if (s.token || s.raw_token) setQrToken(s.token || s.raw_token);
+            setQrToken(fullUrl);
+          } else {
+            setActiveSession(null);
+            setQrToken("");
+            localStorage.removeItem("sbit_active_session");
           }
         }
       } catch (err) {
@@ -347,21 +354,41 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
 
     // Sync session to backend API
-    fetch('/api/qr-session/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        facultyId: session.facultyId,
-        facultyName: session.facultyName,
-        sessionTitle: session.sessionTitle,
-        branch: session.branch,
-        section: session.section,
-        room: session.room,
-        latitude: sessionLat,
-        longitude: sessionLng,
-        radiusMeters: sessionRadius
-      })
-    }).catch(err => console.warn("Backend session start notice:", err));
+    const startBackendSession = async () => {
+      try {
+        const res = await fetch('/api/qr-session/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: session.sessionId,
+            rawToken: rawTokenId,
+            facultyId: session.facultyId,
+            facultyName: session.facultyName,
+            sessionTitle: session.sessionTitle,
+            branch: session.branch,
+            section: session.section,
+            room: session.room,
+            latitude: sessionLat,
+            longitude: sessionLng,
+            radiusMeters: sessionRadius
+          })
+        });
+        if (res.ok) {
+          const resData = await res.json();
+          if (resData.session) {
+            const backendTok = resData.session.raw_token || resData.session.token || rawTokenId;
+            const officialUrl = `${origin}/checkin?token=${backendTok}`;
+            session.qrToken = officialUrl;
+            session.currentRotationToken = officialUrl;
+            setActiveSession({ ...session, qrToken: officialUrl, currentRotationToken: officialUrl });
+            setQrToken(officialUrl);
+          }
+        }
+      } catch (err) {
+        console.warn("Backend session start notice:", err);
+      }
+    };
+    startBackendSession();
 
     setActiveSession(session);
     setQrToken(newToken);

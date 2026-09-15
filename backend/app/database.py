@@ -80,6 +80,19 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     logger.info("PostgreSQL tables verified / created.")
 
+    # Incremental column migrations & constraints
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS biometric_sign_count INTEGER DEFAULT 0 NOT NULL;"))
+            conn.execute(text("""
+                ALTER TABLE attendance_records DROP CONSTRAINT IF EXISTS attendance_records_verification_method_check;
+                ALTER TABLE attendance_records ADD CONSTRAINT attendance_records_verification_method_check 
+                CHECK (verification_method IN ('face_recognition', 'biometric_fallback', 'webauthn_platform', 'qr_gps', 'manual'));
+            """))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"Incremental schema migration note: {e}")
+
     with get_db_context() as db:
         # --- Seed default geofence ---
         existing_geo = db.query(GeofenceConfig).filter_by(id=1).first()

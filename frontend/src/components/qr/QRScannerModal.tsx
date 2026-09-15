@@ -4,7 +4,7 @@ import { useAttendance } from '../../context/AttendanceContext';
 import { useAuth } from '../../context/AuthContext';
 import { Modal } from '../common/Modal';
 import { getBrowserFingerprint } from '../../utils/deviceFingerprint';
-import { loadFaceModels } from '../../face/faceApiLoader';
+import { loadFaceModels } from '../../utils/faceApiLoader';
 import { detectFaceWithLandmarks, BlinkDetector } from '../../utils/faceRecognition';
 import confetti from 'canvas-confetti';
 import {

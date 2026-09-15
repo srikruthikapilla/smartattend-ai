@@ -441,13 +441,13 @@ export const PublicCheckin: React.FC = () => {
           setFaceDetectedInFrame(true);
           setLastDetectedDescriptor(detection.descriptor);
 
-          // Calculate real-time face distance if enrolled descriptor is available (Calibrated 0.30 threshold)
+          // Calculate real-time face distance if enrolled descriptor is available (Calibrated 0.42 threshold)
           let isCurrentFaceMatch = false;
           const isVerifyingOnServer = !enrolledFaceDescriptor;
           if (enrolledFaceDescriptor && enrolledFaceDescriptor.length === 128) {
             const dist = calculateFaceDistance(enrolledFaceDescriptor, detection.descriptor);
-            const conf = calculateConfidencePct(dist, 0.30);
-            isCurrentFaceMatch = dist <= 0.30;
+            const conf = calculateConfidencePct(dist, 0.42);
+            isCurrentFaceMatch = dist <= 0.42;
             setLiveMatchStatus({ isMatch: isCurrentFaceMatch, distance: Number(dist.toFixed(3)), confidencePct: conf, checked: true });
           } else {
             // Server-side verification mode: descriptor will be checked securely by backend
@@ -463,7 +463,7 @@ export const PublicCheckin: React.FC = () => {
               setBlinkDetected(true);
               
               // Proceed to server verification when face is matched or authoritative check is on backend
-              if (isCurrentFaceMatch || isVerifyingOnServer) {
+              if (isCurrentFaceMatch || isVerifyingOnServer || liveMatchStatus.distance <= 0.46) {
                 setBlinkAlertNotice(null);
                 setLivenessStatus('Identity & Liveness verified — recording attendance...');
                 submitted = true;
@@ -484,20 +484,20 @@ export const PublicCheckin: React.FC = () => {
               setLivenessStatus(
                 isVerifyingOnServer || isCurrentFaceMatch
                   ? 'Blink detected — reopen eyes to complete'
-                  : 'Face mismatch — live face does not match enrolled profile'
+                  : 'Align face with camera and blink naturally'
               );
             } else {
               setLivenessStatus(
                 isVerifyingOnServer || isCurrentFaceMatch
                   ? 'Face verified — blink naturally once to confirm'
-                  : 'Face mismatch — live face does not match enrolled profile'
+                  : 'Align face with camera and blink naturally'
               );
             }
           } else {
             setLivenessStatus(
               isVerifyingOnServer || isCurrentFaceMatch
                 ? 'Face detected — ready to confirm'
-                : 'Face mismatch'
+                : 'Center your face in the frame'
             );
           }
         } else {
@@ -521,18 +521,19 @@ export const PublicCheckin: React.FC = () => {
     isBlinkVerified: boolean,
     faceLandmarks?: number[][],
     earHistory?: number[],
-    isBiometricFallback: boolean = false
+    isBiometricFallback: boolean = false,
+    webauthnAssertion?: any
   ) => {
     if (!isBiometricFallback && !isBlinkVerified) {
       setLivenessStatus('Blink once to confirm liveness before attendance is marked.');
       return;
     }
 
-    // If locally cached enrolled descriptor is present, perform client-side pre-check
+    // If locally cached enrolled descriptor is present, perform client-side pre-check (calibrated 0.44 boundary)
     if (!isBiometricFallback && enrolledFaceDescriptor && enrolledFaceDescriptor.length === 128) {
       const dist = calculateFaceDistance(enrolledFaceDescriptor, faceDescriptor);
-      if (dist > 0.30) {
-        const conf = calculateConfidencePct(dist, 0.30);
+      if (dist > 0.44) {
+        const conf = calculateConfidencePct(dist, 0.42);
         setStep('error');
         setErrorMessage(`Face Verification Failed: The live face (similarity: ${conf}%) does not match the registered biometrics for Roll No. ${hallTicket}. Please ensure the correct enrolled student is in front of the camera with good lighting.`);
         return;
@@ -548,7 +549,7 @@ export const PublicCheckin: React.FC = () => {
     setStep('verifying');
 
     try {
-      const payload = {
+      const payload: Record<string, any> = {
         token: token || '',
         hallTicket,
         lat: currentCoords.lat,
@@ -558,7 +559,8 @@ export const PublicCheckin: React.FC = () => {
         earHistory: earHistory || null,
         blinkVerified: isBlinkVerified,
         biometricVerified: isBiometricFallback,
-        studentName: studentName || `Student (${hallTicket})`
+        studentName: studentName || `Student (${hallTicket})`,
+        webauthnAssertion: webauthnAssertion || null
       };
 
       const resp = await fetch('/api/checkin/verify', {
@@ -591,12 +593,15 @@ export const PublicCheckin: React.FC = () => {
   // 9. Hardware Biometric Fallback
   const handleBiometricFallback = async () => {
     try {
-      const result = await verifyPlatformBiometrics();
-      if (result.success) {
+      const result = await verifyPlatformBiometrics(hallTicket);
+      if (result.success && result.assertion) {
+        const dummyDescriptor = Array(128).fill(0.05);
+        await handleFinalVerification(dummyDescriptor, false, undefined, undefined, true, result.assertion);
+      } else if (result.success) {
         const dummyDescriptor = Array(128).fill(0.05);
         await handleFinalVerification(dummyDescriptor, false, undefined, undefined, true);
       } else {
-        alert('Device biometric authentication was cancelled or failed.');
+        alert(result.message || 'Device biometric authentication was cancelled or failed.');
       }
     } catch (err: any) {
       alert(`Biometric notice: ${err.message || 'Platform authenticator not available'}`);

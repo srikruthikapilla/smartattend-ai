@@ -15,6 +15,7 @@ from typing import List, Dict, Any, Optional
 
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, or_, func
+from sqlalchemy.exc import IntegrityError, NoResultFound
 
 from app.config import JWT_SECRET
 from app.models.schemas import VerifyCheckinPayload
@@ -34,6 +35,12 @@ from app.database import get_db, get_db_context
 from app.dependencies.auth import verify_edge_key, get_current_user, require_role
 from app.routes.auth import _rate_limit
 from app.services.face_recognition_service import face_service
+from app.services.redis_queue import (
+    get_cached_student_status,
+    set_cached_student_status,
+    invalidate_student_cache,
+    enqueue_audit_log
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +60,6 @@ def _extract_raw_token(token: str) -> str:
             if raw:
                 return raw
     return t
-
-today_attendance_records: List[Dict[str, Any]] = []
-
-# Registered student profiles cache (for public self-service check and onboarding)
-student_profiles: Dict[str, Dict[str, Any]] = {}
 
 # Global reference to Socket.io server instance for live push
 sio_server = None
@@ -124,18 +126,18 @@ def validate_checkin_session(token: str, db: Session = Depends(get_db)):
     """
     clean_token = _extract_raw_token(token) if token else ""
 
-    # --- Strategy 1: Check token history buffer in memory ---
+    # --- Strategy 1: Check in-memory active session & tokens ---
     if clean_token and clean_token in valid_session_tokens:
         s_data = valid_session_tokens[clean_token]
         session_lat = s_data.get("faculty_lat") or current_geofence["center_lat"]
         session_lng = s_data.get("faculty_lng") or current_geofence["center_lng"]
-        radius_m = s_data.get("radius_meters") or 500
+        radius_m = s_data.get("radius_meters") or 150
         return {
             "valid": True,
             "session": {
                 "sessionId": s_data.get("sessionId", "active_session"),
-                "sessionTitle": s_data.get("sessionTitle", "Campus Academic Session"),
-                "facultyName": s_data.get("facultyName", "Faculty"),
+                "sessionTitle": s_data.get("sessionTitle", "Academic Session"),
+                "facultyName": s_data.get("facultyName", "Faculty Member"),
                 "branch": s_data.get("branch", "CSE"),
                 "section": s_data.get("section", "A"),
                 "room": s_data.get("room", "Innovation Centre Lab"),
@@ -150,36 +152,7 @@ def validate_checkin_session(token: str, db: Session = Depends(get_db)):
             }
         }
 
-    # --- Strategy 2: Plain UUID / Raw token match on current_session ---
-    if current_session and clean_token and clean_token in (
-        str(current_session.get("sessionId")),
-        str(current_session.get("token")),
-        str(current_session.get("raw_token"))
-    ):
-        session_lat = current_session.get("faculty_lat") or current_geofence["center_lat"]
-        session_lng = current_session.get("faculty_lng") or current_geofence["center_lng"]
-        radius_m = current_session.get("radius_meters") or 500
-        return {
-            "valid": True,
-            "session": {
-                "sessionId": current_session["sessionId"],
-                "sessionTitle": current_session.get("sessionTitle", "Active Session"),
-                "facultyName": current_session.get("facultyName", "Faculty"),
-                "branch": current_session.get("branch", "CSE"),
-                "section": current_session.get("section", "A"),
-                "room": current_session.get("room", "Innovation Centre Lab"),
-                "faculty_lat": session_lat,
-                "faculty_lng": session_lng,
-                "radius_meters": radius_m
-            },
-            "geofence": {
-                "centerLat": session_lat,
-                "centerLng": session_lng,
-                "radiusMeters": radius_m
-            }
-        }
-
-    # --- Strategy 3: Check active sessions in PostgreSQL ---
+    # --- Strategy 2: Check active sessions in PostgreSQL by qr_token or session UUID ---
     try:
         s = None
         if clean_token:
@@ -198,11 +171,25 @@ def validate_checkin_session(token: str, db: Session = Depends(get_db)):
                     AttendanceSession.status == "active"
                 ).first()
 
+        # Strategy 3: Active classroom session recovery within 4-hour window
+        if not s:
+            now_utc = datetime.now(timezone.utc)
+            cutoff = now_utc - timedelta(hours=4)
+            s = (
+                db.query(AttendanceSession)
+                .filter(
+                    AttendanceSession.status == "active",
+                    or_(AttendanceSession.end_time == None, AttendanceSession.end_time > now_utc, AttendanceSession.created_at >= cutoff)
+                )
+                .order_by(desc(AttendanceSession.created_at))
+                .first()
+            )
+
         if s:
             geo = s.geofence or {}
             session_lat = geo.get("lat") or current_geofence["center_lat"]
             session_lng = geo.get("lng") or current_geofence["center_lng"]
-            radius_m = s.radius_meters or 500
+            radius_m = s.radius_meters or 150
             return {
                 "valid": True,
                 "session": {
@@ -284,6 +271,11 @@ def get_student_enrollment_status(request: Request, hall_ticket: str, db: Sessio
     if not re.match(r"^2[0-9A-Z]{9}$", ht):
         raise HTTPException(status_code=400, detail="Invalid Hall Ticket format. Must be 10 characters starting with '2'.")
 
+    # Fast-path: Check high-performance Redis cache first (60s TTL)
+    cached = get_cached_student_status(ht)
+    if cached:
+        return cached
+
     student_name = f"Student ({ht})"
     branch = "CSE"
     section = "A"
@@ -313,12 +305,8 @@ def get_student_enrollment_status(request: Request, hall_ticket: str, db: Sessio
 
     is_face_enrolled = bool(enrolled_desc and isinstance(enrolled_desc, list) and len(enrolled_desc) in (128, 512))
 
-    # Check if student is already marked present today or in active session
+    # P1-1: No in-memory cache — query Postgres directly for today's records.
     already_marked_record = None
-    for rec in today_attendance_records:
-        if rec.get("hallTicketNo") == ht:
-            already_marked_record = rec
-            break
 
     if not already_marked_record:
         try:
@@ -353,9 +341,9 @@ def get_student_enrollment_status(request: Request, hall_ticket: str, db: Sessio
         "biometricEnrolled": is_bio_enrolled,
         "faceDescriptor": None  # SECURITY: Never return raw biometric descriptors
     }
-    student_profiles[ht] = profile
+    # P1-1: No in-memory cache — return directly from DB query.
 
-    return {
+    result = {
         "hallTicketNo": ht,
         "isRegistered": True,
         "isFaceEnrolled": is_face_enrolled,
@@ -365,6 +353,8 @@ def get_student_enrollment_status(request: Request, hall_ticket: str, db: Sessio
         "alreadyMarkedRecord": already_marked_record,
         "profile": profile
     }
+    set_cached_student_status(ht, result, ttl=60)
+    return result
 
 
 @router.post("/api/student/reset-biometrics/{hall_ticket}")
@@ -398,11 +388,6 @@ def reset_student_biometrics(
     face_service.remove_embedding(ht)
     face_service.remove_embedding(ht.lower())
 
-    if ht in student_profiles:
-        student_profiles[ht]["faceEnrolled"] = False
-        student_profiles[ht]["biometricEnrolled"] = False
-        student_profiles[ht]["faceDescriptor"] = None
-
     try:
         student = db.query(Student).filter(func.upper(Student.hall_ticket_no) == ht).first()
         if student:
@@ -419,6 +404,7 @@ def reset_student_biometrics(
         ).delete()
 
         db.commit()
+        invalidate_student_cache(ht)
     except Exception as e:
         logger.warning(f"Reset face biometrics note: {e}")
 
@@ -439,7 +425,6 @@ def clear_all_registered_biometrics(db: Session = Depends(get_db)):
     Requires: admin JWT.
     """
     student_face_cache.clear()
-    student_profiles.clear()
 
     # Reset face recognition service memory registry
     face_service._enrolled_faces.clear()
@@ -520,7 +505,7 @@ def register_student_biometrics(
         except Exception as svc_err:
             logger.warning(f"Note on face_service registration: {svc_err}")
 
-    student_profiles[ht] = {
+    profile_dict = {
         "name": student_name,
         "hallTicketNo": ht,
         "branch": branch,
@@ -573,6 +558,7 @@ def register_student_biometrics(
                 db.add(emb)
 
         db.commit()
+        invalidate_student_cache(ht)
     except HTTPException:
         raise
     except Exception as e:
@@ -582,7 +568,7 @@ def register_student_biometrics(
     return {
         "success": True,
         "message": f"Biometrics successfully registered for {ht}. You are ready for fast face attendance!",
-        "profile": student_profiles[ht]
+        "profile": profile_dict
     }
 
 
@@ -637,9 +623,6 @@ def get_student_attendance_history(hall_ticket: str, db: Session = Depends(get_d
         student_records = [r.to_dict() for r in recs]
     except Exception as e:
         logger.warning(f"PostgreSQL query note: {e}")
-
-    if not student_records:
-        student_records = [r for r in today_attendance_records if r.get("hallTicketNo") == ht or r.get("studentId") == ht]
 
     # 3. Total sessions conducted count (from attendance_sessions)
     total_sessions_conducted = 0
@@ -741,15 +724,31 @@ async def verify_student_checkin(
         try:
             s = None
             if normalized_token:
-                s = db.query(AttendanceSession).filter(
-                    AttendanceSession.qr_token == normalized_token,
-                    AttendanceSession.status == "active"
-                ).first()
+                try:
+                    clean_uuid = uuid.UUID(normalized_token)
+                    s = db.query(AttendanceSession).filter(
+                        AttendanceSession.id == clean_uuid,
+                        AttendanceSession.status == "active"
+                    ).first()
+                except (ValueError, TypeError):
+                    pass
 
+                if not s:
+                    s = db.query(AttendanceSession).filter(
+                        AttendanceSession.qr_token == normalized_token,
+                        AttendanceSession.status == "active"
+                    ).first()
+
+            # Strategy 3b: Active classroom session recovery within 4-hour window
             if not s:
+                now_utc = datetime.now(timezone.utc)
+                cutoff = now_utc - timedelta(hours=4)
                 s = (
                     db.query(AttendanceSession)
-                    .filter(AttendanceSession.status == "active")
+                    .filter(
+                        AttendanceSession.status == "active",
+                        or_(AttendanceSession.end_time == None, AttendanceSession.end_time > now_utc, AttendanceSession.created_at >= cutoff)
+                    )
                     .order_by(desc(AttendanceSession.created_at))
                     .first()
                 )
@@ -813,6 +812,8 @@ async def verify_student_checkin(
                 "markedAt": dup.marked_at.isoformat() if dup.marked_at else None,
                 "status": dup.status or "present",
                 "verificationMethod": dup.verification_method or "face_recognition",
+                "verification_method": dup.verification_method or "face_recognition",
+                "biometric_verified": dup.biometric_verified,
                 "alreadyMarked": True
             }
     except Exception as e:
@@ -827,35 +828,77 @@ async def verify_student_checkin(
         }
 
     # 3. Geofence Distance Check
+    # P0-4: Enforce the session-specific radius strictly. The previous
+    # `and campus_dist > 5000` OR-relief let anyone within 5km of the campus
+    # center bypass the session radius entirely — drop it.
     distance_m = calculate_haversine_distance(
         payload.lat,
         payload.lng,
         session_lat,
         session_lng
     )
-    campus_dist = calculate_haversine_distance(
-        payload.lat,
-        payload.lng,
-        current_geofence["center_lat"],
-        current_geofence["center_lng"]
-    )
-    if distance_m > session_radius and campus_dist > 5000:
+    if distance_m > session_radius:
         raise HTTPException(status_code=403, detail="Outside the allowed check-in radius.")
 
     # 4. Face Recognition & Liveness Matching
+    # NOTE: The old `payload.biometricVerified` short-circuit that set
+    # `verification_method = "biometric_platform"` and `face_match_confidence = 0.99`
+    # is removed (P0-2). A client-sent boolean cannot establish a cryptographic
+    # WebAuthn assertion. Until real WebAuthn assertion verification is implemented,
+    # that code path is entirely absent — a missing feature is safer than a
+    # feature that looks secure but isn't.
     face_match_confidence = 0.95
     face_distance = 0.10
     verification_method = "face_recognition"
-
     server_blink_verified = False
-    if payload.biometricVerified:
-        verification_method = "biometric_platform"
-        face_match_confidence = 0.99
+    server_biometric_verified = False
+
+    if payload.webauthnAssertion:
+        # Cryptographic Server-Side WebAuthn FIDO2 Assertion Verification
+        from app.services.webauthn_service import verify_authentication_response
+        student_rec = db.query(Student).filter(Student.hall_ticket_no == hall_ticket).first()
+        if not student_rec or not student_rec.biometric_credential_id:
+            raise HTTPException(
+                status_code=403,
+                detail=f"No enrolled WebAuthn hardware authenticator found for {hall_ticket}. Please enroll a passkey first."
+            )
+
+        assertion_data = payload.webauthnAssertion
+        valid, auth_result = verify_authentication_response(
+            user_id=hall_ticket,
+            credential_id=assertion_data.get("credentialId", ""),
+            client_data_json=assertion_data.get("clientDataJSON", ""),
+            authenticator_data=assertion_data.get("authenticatorData", ""),
+            signature=assertion_data.get("signature", ""),
+            stored_credential_id=student_rec.biometric_credential_id,
+            stored_public_key=student_rec.biometric_public_key,
+            stored_sign_count=student_rec.biometric_sign_count or 0
+        )
+
+        if not valid:
+            raise HTTPException(status_code=403, detail=auth_result.get("error", "WebAuthn hardware signature verification failed."))
+
+        # Update counter to prevent replay attacks
+        student_rec.biometric_sign_count = auth_result["newSignCount"]
+        db.commit()
+
+        server_biometric_verified = True
+        verification_method = "webauthn_platform"
+        face_match_confidence = 1.0
+        face_distance = 0.0
+
     elif payload.faceDescriptor is not None:
         if len(payload.faceDescriptor) not in (128, 512):
             raise HTTPException(status_code=400, detail="faceDescriptor must be a 128- or 512-dimensional float list.")
 
-        # Server-side ML Blink & Liveness Evaluation
+        # Server-side ML Blink & Liveness Evaluation.
+        # Requires liveness telemetry (earHistory or faceLandmarks) for verification
+        if not payload.earHistory and not payload.faceLandmarks:
+            raise HTTPException(
+                status_code=400,
+                detail="Liveness telemetry (earHistory or faceLandmarks) is required for liveness verification."
+            )
+
         blink_result = verify_live_blink(
             ear_history=payload.earHistory,
             face_landmarks=payload.faceLandmarks,
@@ -868,7 +911,7 @@ async def verify_student_checkin(
             f"dip={blink_result.dip_depth}, min_ear={blink_result.min_ear}, client_blink={payload.blinkVerified}"
         )
 
-        if not blink_result.is_valid_blink and not payload.blinkVerified:
+        if not blink_result.is_valid_blink:
             raise HTTPException(
                 status_code=403,
                 detail=f"Blink liveness verification failed: {blink_result.reason}"
@@ -891,7 +934,7 @@ async def verify_student_checkin(
                 detail=f"Face model version mismatch (enrolled: {len(enrolled_descriptor)}D, live: {len(payload.faceDescriptor)}D). Please re-enroll your face."
             )
 
-        match, dist, conf = compare_face_embeddings(enrolled_descriptor, payload.faceDescriptor, threshold=0.30)
+        match, dist, conf = compare_face_embeddings(enrolled_descriptor, payload.faceDescriptor, threshold=0.42)
         face_distance = dist
         face_match_confidence = max(conf / 100.0, 0.01)
         logger.info(
@@ -916,32 +959,8 @@ async def verify_student_checkin(
             detail="faceDescriptor is required for facial check-in. Please use the face enrollment flow or biometric fallback."
         )
 
-    # Ensure attendance_session exists in PostgreSQL to satisfy foreign key constraint
-    now_dt = datetime.now(timezone.utc)
-    try:
-        sess_chk = db.query(AttendanceSession).filter_by(id=session_uuid).first()
-        if not sess_chk:
-            new_sess = AttendanceSession(
-                id=session_uuid,
-                session_title=session_title,
-                faculty_id="faculty_201",
-                faculty_name="Faculty Member",
-                branch=branch,
-                section=section,
-                room="Innovation Centre Lab",
-                start_time=now_dt,
-                end_time=now_dt + timedelta(hours=2),
-                status="active",
-                qr_token=normalized_token or str(uuid.uuid4()),
-                radius_meters=session_radius,
-                geofence={"lat": session_lat, "lng": session_lng}
-            )
-            db.add(new_sess)
-            db.commit()
-    except Exception as e:
-        logger.warning(f"Auto session check/insert note: {e}")
-
-    # Look up student's real name and academic branch from users table
+    # P1-2: Wrap session auto-creation + attendance insert in a single transaction.
+    # Look up student's real name and academic branch from users table (read-only, can stay outside txn).
     real_student_name = payload.studentName
     real_branch = branch
     real_section = section
@@ -962,33 +981,64 @@ async def verify_student_checkin(
     if not real_student_name:
         real_student_name = f"Student ({hall_ticket})"
 
-    # 5. Write to PostgreSQL attendance_records table
-    new_rec = AttendanceRecord(
-        id=uuid.uuid4(),
-        session_id=session_uuid,
-        student_id=hall_ticket,
-        student_name=real_student_name,
-        hall_ticket_no=hall_ticket,
-        branch=real_branch,
-        section=real_section,
-        year=3,
-        status="present",
-        verification_method=verification_method,
-        face_match_confidence=face_match_confidence,
-        face_distance=face_distance,
-        blink_verified=bool(server_blink_verified if payload.faceDescriptor is not None else payload.blinkVerified),
-        biometric_verified=bool(payload.biometricVerified),
-        gps_distance_meters=distance_m,
-        student_lat=student_lat,
-        student_lng=student_lng,
-        marked_at=now_dt
-    )
-    db.add(new_rec)
-    db.commit()
-    db.refresh(new_rec)
+    now_dt = datetime.now(timezone.utc)
+    try:
+        # Ensure attendance_session exists; if missing, create it.
+        sess_chk = db.query(AttendanceSession).filter_by(id=session_uuid).first()
+        if not sess_chk:
+            new_sess = AttendanceSession(
+                id=session_uuid,
+                session_title=session_title,
+                faculty_id="faculty_201",
+                faculty_name="Faculty Member",
+                branch=branch,
+                section=section,
+                room="Innovation Centre Lab",
+                start_time=now_dt,
+                end_time=now_dt + timedelta(hours=2),
+                status="active",
+                qr_token=normalized_token or str(uuid.uuid4()),
+                radius_meters=session_radius,
+                geofence={"lat": session_lat, "lng": session_lng}
+            )
+            db.add(new_sess)
+            # Flush to get the session id before inserting the record.
+            db.flush()
+
+        # Now create and persist the attendance record.
+        new_rec = AttendanceRecord(
+            id=uuid.uuid4(),
+            session_id=session_uuid,
+            student_id=hall_ticket,
+            student_name=real_student_name,
+            hall_ticket_no=hall_ticket,
+            branch=real_branch,
+            section=real_section,
+            year=3,
+            status="present",
+            verification_method=verification_method,
+            face_match_confidence=face_match_confidence,
+            face_distance=face_distance,
+            blink_verified=bool(server_blink_verified),
+            biometric_verified=bool(server_biometric_verified),
+            gps_distance_meters=distance_m,
+            student_lat=student_lat,
+            student_lng=student_lng,
+            marked_at=now_dt
+        )
+        db.add(new_rec)
+        db.commit()
+        db.refresh(new_rec)
+    except IntegrityError as e:
+        db.rollback()
+        logger.warning(f"Integrity error during session/record creation: {e}")
+        raise HTTPException(status_code=409, detail="Conflict: session or record already exists.")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to persist session and attendance record: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error while saving attendance.")
 
     rec_dict = new_rec.to_dict()
-    today_attendance_records.insert(0, rec_dict)
 
     # 6. Emit real-time WebSocket event over Socket.io
     if sio_server:
@@ -1006,6 +1056,23 @@ async def verify_student_checkin(
             })
         except Exception as e:
             logger.warning(f"Socket.IO emit note: {e}")
+
+    # 7. Asynchronous Redis Queue & Status Cache Invalidation
+    invalidate_student_cache(hall_ticket)
+    enqueue_audit_log(
+        action="student_checkin_verified",
+        performed_by=hall_ticket,
+        performer_role="student",
+        details={
+            "record_id": str(new_rec.id),
+            "session_id": str(new_rec.session_id) if new_rec.session_id else None,
+            "method": new_rec.verification_method,
+            "blink_verified": bool(new_rec.blink_verified),
+            "biometric_verified": bool(new_rec.biometric_verified),
+            "similarity": new_rec.face_match_confidence,
+            "distance_m": new_rec.gps_distance_meters
+        }
+    )
 
     return {
         "success": True,
@@ -1044,8 +1111,8 @@ def get_today_attendance(db: Session = Depends(get_db)):
         logger.warning(f"Error reading today attendance from PostgreSQL: {e}")
 
     return {
-        "records": today_attendance_records,
-        "count": len(today_attendance_records)
+        "records": [],
+        "count": 0
     }
 
 

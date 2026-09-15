@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Webcam from "react-webcam";
-import { faceapi, loadFaceModels } from "../../face/faceApiLoader";
+import { faceapi, loadFaceModels } from "../../utils/faceApiLoader";
 import { Users, UserCheck, AlertTriangle } from "lucide-react";
 
 export default function FaceCamera() {

@@ -46,6 +46,8 @@ class AttendanceOverrideRequest(BaseModel):
     reviewedBy: Optional[str] = None
 
 class QRSessionStartPayload(BaseModel):
+    sessionId: Optional[str] = None
+    rawToken: Optional[str] = None
     facultyId: Optional[str] = "faculty_201"
     facultyName: Optional[str] = "Faculty Member"
     sessionTitle: Optional[str] = "Campus Academic Session"
@@ -67,6 +69,7 @@ class VerifyCheckinPayload(BaseModel):
     earHistory: Optional[List[float]] = None
     blinkVerified: Optional[bool] = False
     biometricVerified: Optional[bool] = False
+    webauthnAssertion: Optional[Dict[str, Any]] = None
 
     @field_validator("hallTicket")
     @classmethod

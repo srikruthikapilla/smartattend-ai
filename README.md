@@ -9,7 +9,7 @@
 [![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg?logo=redis&logoColor=white)](https://redis.io/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
 [![CI/CD](https://img.shields.io/badge/CI%2FCD-GitHub_Actions-2088FF.svg?logo=github-actions&logoColor=white)](https://github.com/features/actions)
-[![Production Ready](https://img.shields.io/badge/Production-Ready%2010%2F10-success.svg)](plan.md)
+[![Production Ready](https://img.shields.io/badge/Production-Ready%2010%2F10-success.svg)](FIXES_APPLIED.md)
 
 **Smart Attend** is an enterprise-ready, multi-modal attendance automation platform engineered for academic institutions. It provides zero-proxy attendance enforcement using **128-dimensional Facial Recognition AI**, **Real-Time Eye Blink Liveness Detection**, **Campus GPS Geofencing**, **Time-Bound Dynamic QR Tokens**, and **WebAuthn / Passkey Biometrics**.
 
@@ -67,7 +67,8 @@ The system runs on a **self-hosted PostgreSQL 16 database** with **Redis 7** for
 - **Framework:** [FastAPI](https://fastapi.tiangolo.com/) (Python 3.11+)
 - **ASGI Server:** [Uvicorn](https://www.uvicorn.org/)
 - **ORM & DB:** [SQLAlchemy](https://www.sqlalchemy.org/) + [PostgreSQL 16](https://www.postgresql.org/)
-- **Caching & OTP:** [Redis 7](https://redis.io/) (`redis-py`) for password reset OTPs with 10-minute TTL
+- **Hardware Biometrics:** [WebAuthn FIDO2](https://github.com/duo-labs/py_webauthn) (`webauthn==2.1.0` + `cbor2`) with monotonic signature counter anti-replay checks
+- **Background Queue & Caching:** Redis 7 Task Queue (`smartattend:queue:bg_tasks`) for non-blocking DB audit logging & Socket.IO fanout, plus 60-second status caching
 - **Email Delivery:** [Brevo SMTP Relay](https://www.brevo.com/) via Python standard library `smtplib`
 - **Realtime:** `python-socketio` Async ASGI server
 - **Security:** `passlib` (bcrypt password hashing), `pyjwt` (HS256 access tokens), httpOnly cookies for production
@@ -76,7 +77,7 @@ The system runs on a **self-hosted PostgreSQL 16 database** with **Redis 7** for
 
 ### **Infrastructure**
 - **Docker Compose:** Orchestration of 4 isolated containers (`frontend`, `backend`, `postgres`, `redis`)
-- **Web Server:** Multi-stage Nginx container serving optimized production React bundle and reverse-proxying `/api` and `/socket.io`
+- **Web Server & TLS Reverse Proxy:** Multi-stage Nginx container with HTTP (port 3000) and HTTPS (port 3443 with TLS 1.2/1.3 and automatic OpenSSL self-signed certificate generation), reverse-proxying `/api` and `/socket.io` with modern `Permissions-Policy`
 
 ---
 
@@ -91,28 +92,31 @@ flowchart TD
         AdminDash["🛡️ Admin Dashboard (/admin/dashboard)"]
     end
 
-    subgraph NginxProxy ["Reverse Proxy (Port 3000)"]
-        Nginx["Nginx Web Server"]
+    subgraph NginxProxy ["Reverse Proxy (HTTP :3000 / HTTPS :3443)"]
+        Nginx["Nginx Web Server & TLS 1.2/1.3 Termination\n(Auto-Bootstrapped OpenSSL Certs + Permissions-Policy)"]
     end
 
     subgraph BackendApp ["FastAPI Backend (Port 5000)"]
         AuthModule["Auth & RBAC (Admin & Faculty) + OTP"]
         QRModule["Dynamic QR Generator & Sessions"]
         CheckinModule["Multi-Modal Verification Engine + Server-Side Blink Detection"]
+        WebAuthnModule["🔐 WebAuthn FIDO2 Engine (Anti-Replay Counter)"]
+        QueueWorker["⚡ Redis Async Background Queue Worker"]
         AttendanceModule["Live Attendance & Roster Controller"]
         SocketServer["⚡ Socket.IO Event Broadcaster"]
     end
 
     subgraph DataStorage ["Data & Cache Layer"]
-        PostgresDB[("🗄️ PostgreSQL 16\nadmins | faculty | students\nsessions | attendance_records\nstudent_face_embeddings")]
-        RedisCache[("⚡ Redis 7\nPassword Reset OTPs\nEnrollment OTPs\nSession Caching")]
+        PostgresDB[("🗄️ PostgreSQL 16\nadmins | faculty | students\nsessions | attendance_records\nstudent_face_embeddings | audit_logs")]
+        RedisCache[("⚡ Redis 7\nPassword & Enrollment OTPs\nBackground Task Queue (smartattend:queue:bg_tasks)\nStudent Status 60s Cache (student:status:HT)")]
     end
 
-    Clients --> Nginx
+    Clients -->|HTTP :3000 / HTTPS :3443| Nginx
     Nginx -->|/api & /socket.io| BackendApp
     BackendApp --> PostgresDB
     BackendApp --> RedisCache
-    BackendApp -->|Live Attendance Push| SocketServer
+    QueueWorker -->|Async Audit Persist| PostgresDB
+    QueueWorker -->|Non-Blocking Broadcast| SocketServer
     SocketServer -.->|Real-time Socket Events| Clients
 ```
 
@@ -343,37 +347,41 @@ This prevents accidental deployment with insecure defaults.
 
 ---
 
-### 3. Local Development (Docker Compose)
+### 3. Running with Docker Compose (Recommended)
 
-The easiest way to run the entire stack locally is via Docker Compose. Because the `.env` file is located in the `backend/` folder (to keep it close to the API), you **must** pass the `--env-file` flag to Docker Compose.
+The fastest and most reliable way to run the entire stack is via Docker Compose. Because the `.env` file is located inside `backend/`, you **must** pass `--env-file backend/.env` to all Docker Compose commands.
 
-Start the stack:
+**Single command to build and launch the entire stack:**
 ```bash
-docker compose --env-file backend/.env up -d
+docker compose --env-file backend/.env up -d --build
 ```
-*(If you make changes to the source code, you can rebuild the containers by adding `--build` to the end of the command).*
 
-This starts 4 auto-restarting containers:
+This starts 4 isolated, auto-restarting containers with healthchecks:
 | Container | Port | Description |
 | :--- | :--- | :--- |
-| `smartattend-frontend` | `http://localhost:3000` | Production React App (Nginx) |
-| `smartattend-backend` | `http://localhost:5000` | FastAPI Backend (Internal Only) |
-| `smartattend-postgres` | `5432` | PostgreSQL 16 Database (Internal Only) |
-| `smartattend-redis` | `6379` | Redis 7 Cache (Internal Only) |
+| `smartattend-frontend` | `http://localhost:3000`<br>`https://localhost:3443` | Production React App (Nginx Reverse Proxy & TLS 1.2/1.3 Termination) |
+| `smartattend-backend` | `http://localhost:5000` | FastAPI Backend + Redis Background Task Worker (Internal Network) |
+| `smartattend-postgres` | `5432` | PostgreSQL 16 Database (Internal Network) |
+| `smartattend-redis` | `6379` | Redis 7 Cache, Task Queue & OTP Store (Internal Network) |
 
-> **Note on Database Resets:** If you change `POSTGRES_PASSWORD` in your `.env` *after* the database has already been created, PostgreSQL will reject the connection. To fully reset the database and apply the new password, run: `docker compose down -v` followed by the `up` command above.
+> **Note on Database Resets:** If you modify `POSTGRES_PASSWORD` in your `.env` *after* the database volume has already been initialized, PostgreSQL will reject connections with the new password. To wipe existing data volumes and reinitialize, run: `docker compose down -v` followed by the build command above.
 
-#### Useful Docker Compose Commands
+#### Essential Docker Commands
+
 | Action | Command |
 | :--- | :--- |
-| **Start / Run stack** | `docker compose --env-file backend/.env up -d` |
-| **Build & Run (All)** | `docker compose --env-file backend/.env up -d --build` |
-| **Build & Run Frontend only** | `docker compose --env-file backend/.env up -d --build frontend` |
-| **Build & Run Backend only** | `docker compose --env-file backend/.env up -d --build backend` |
-| **Stop all containers** | `docker compose down` |
-| **Stop and wipe database/data** | `docker compose down -v` |
-| **View logs (All)** | `docker compose logs -f` |
-| **View logs (Backend only)** | `docker compose logs -f backend` |
+| **Build & Start All (Single Command)** | `docker compose --env-file backend/.env up -d --build` |
+| **Start Stack (Without Rebuilding)** | `docker compose --env-file backend/.env up -d` |
+| **Build & Start Backend Only** | `docker compose --env-file backend/.env up -d --build backend` |
+| **Build & Start Frontend Only** | `docker compose --env-file backend/.env up -d --build frontend` |
+| **Stop All Containers** | `docker compose down` |
+| **Stop & Wipe All Persistent Volumes** | `docker compose down -v` |
+| **Check Container Status & Health** | `docker compose ps` |
+| **Follow All Container Logs** | `docker compose logs -f` |
+| **Follow Backend Logs Only** | `docker compose logs -f backend` |
+| **Follow Frontend Logs Only** | `docker compose logs -f frontend` |
+| **Execute Shell / Command in Backend** | `docker compose exec backend <cmd>` |
+| **Execute PostgreSQL psql CLI** | `docker compose exec postgres psql -U postgres -d smartattend` |
 
 ---
 
@@ -442,79 +450,89 @@ If no administrators exist in the database, the system will **automatically boot
 
 | Threat / Attack Vector | Defense Mechanism | Implementation Detail |
 | :--- | :--- | :--- |
-| **Photo / Display Screen Spoofing** | **Server-Side ML Blink Detection** | Temporal EAR analysis validates natural blink patterns (dip depth ≥ 0.022, reopening detection). Rejects static photos and playback attacks. |
-| **Off-Campus Remote Proxy** | **GPS Geofencing** | Enforces Euclidean Haversine distance from campus centroid ($\le 150\text{m}$). Fail-closed on missing or spoofed coordinates. |
-| **QR Screenshot Relaying** | **Rotating Ephemeral Tokens** | Dynamic classroom QR tokens cycle periodically with cryptographic signatures and expiration. |
+| **Photo / Display Screen Spoofing** | **Fail-Closed Server-Side ML Blink Detection** | Analyzes a sliding window of Eye Aspect Ratio (EAR) samples ($\ge 3$ samples required). Enforces open baseline ($\ge 0.18$), contraction dip ($\ge 0.022$), and eye reopening. Rejects flatline signals ($\text{std} < 0.005$) and anatomical anomalies. |
+| **Off-Campus Remote Proxy** | **Strict Session GPS Geofencing** | Enforces Euclidean Haversine distance strictly against the session-specific radius ($\le 150\text{m}$). The legacy 5km campus relief clause has been removed to prevent off-site check-in bypass. |
+| **QR Screenshot Relaying** | **Rotating Ephemeral Tokens** | Dynamic classroom QR tokens cycle periodically with cryptographic signatures and expiration. Verification strictly binds to the active session (no arbitrary session fallback). |
+| **Unverified Biometric Claims** | **Removal of Client Flag Trust** | The check-in endpoint no longer honors unverified client-reported `biometricVerified: true` flags. Only genuine facial recognition with validated ML liveness grants attendance. |
+| **Data Race / Incomplete Writes** | **Atomic Database Transactions** | Session bootstrap and attendance record insertions are executed within single transactional scopes with explicit rollback on `IntegrityError`. |
 | **Attendance History Wipe** | **Session-Scoped Deletes** | All manual overrides, toggles, bulk actions, and kiosk captures delete existing records scoped strictly to `(session_id, hall_ticket_no)`. |
-| **Biometric Descriptor Leakage** | **Zero-Vector Public Exposure** | Raw 128-D / 512-D face descriptors are stripped from public responses (`check-status`, `Student.to_dict()`, user queries). |
+| **Biometric Descriptor Leakage** | **Zero-Vector Public Exposure** | Raw 128-D / 512-D face descriptors are stripped from public responses (`check-status`, `Student.to_dict()`, user queries). The client never receives raw biometric vectors. |
 | **Brute Force & Flooding** | **SlowAPI Rate Limiting** | Strict rate limits applied to check-in (`5/min`), verification (`10/min`), login (`10/min`), and password reset OTP dispatch (`3/min`). |
 | **Unauthenticated Read Access** | **Strict JWT RBAC** | All roster and history endpoints (`/api/attendance/records`, `/api/admin/geofence`) require verified JWT authentication via httpOnly cookies. |
 | **Cryptographic RNG for OTP** | **Python `secrets` Module** | OTPs are generated using CSPRNG (`secrets.randbelow`) and cached in Redis with a 10-minute TTL. |
 | **Default Credential Usage** | **Production Startup Guards** | Fails closed on boot if default credentials or passwords are used in production environments. |
 | **JWT Token Theft (XSS)** | **httpOnly Cookie Authentication** | JWT tokens stored in httpOnly, secure, SameSite=lax cookies. JavaScript cannot access tokens, preventing XSS-based token theft. |
-| **Student Identity Spoofing** | **OTP-Based Enrollment Verification** | First-time face enrollment requires OTP verification via institutional email to prevent claiming existing-but-unenrolled identities. |
 
 ---
 
 ## 🔒 Security Enhancements
 
-Smart Attend has undergone comprehensive security hardening to achieve **10/10 production readiness**. All critical vulnerabilities have been addressed through systematic security improvements.
+Smart Attend has undergone comprehensive security hardening addressing all critical attack surfaces:
 
-### ✅ Implemented Security Fixes
+### ✅ Production Security Hardening
 
-#### Server-Side ML Blink Detection
-- **Temporal EAR analysis** validates natural human blink patterns on the backend
-- Analyzes Eye Aspect Ratio history for dip depth (≥ 0.022), reopening detection, and baseline validation
-- Rejects static photos, printed portraits, and screen video playback attacks
-- Implements `verify_live_blink()` with landmark geometry validation and confidence scoring
-- Files: `backend/app/utils/blink_detection.py`
+#### 1. Server-Side ML Blink Liveness (Fail-Closed)
+- **Temporal EAR Analysis**: Validates natural human blink dynamics on the backend via [`app.utils.blink_detection`](file:///d:/Projects/smartattend-ai/backend/app/utils/blink_detection.py).
+- **Signal Processing Pipeline**:
+  - Requires a minimum of 3 temporal EAR samples from the client sliding window.
+  - Verifies resting open-eye baseline ($\text{EAR} \ge 0.18$).
+  - Detects distinct contraction trough ($\text{dip\_depth} \ge 0.022$).
+  - Confirms post-blink eye reopening.
+  - **Static Spoof Defense**: Rejects flat signals ($\text{std} < 0.005$) and out-of-bounds physiological anomalies ($[0.02, 0.65]$).
+  - **Zero Client Override**: Fails closed if telemetry is absent or validation fails.
 
-#### httpOnly Cookie Authentication
-- **JWT storage migrated** from localStorage to httpOnly, secure, SameSite=lax cookies
-- JavaScript cannot access tokens, preventing XSS-based token theft
-- Backend sets cookies on login with 8-hour expiry matching JWT token
-- Added `/api/auth/logout` endpoint to clear cookies server-side
-- CSRF protection via SameSite=lax configuration
-- Files: `backend/app/config.py`, `backend/app/routes/auth.py`, `backend/app/dependencies/auth.py`, `frontend/src/context/AuthContext.tsx`
+#### 2. Strict Session-Bound Geofencing
+- Haversine distance is checked strictly against `session_radius` ($\le 150\text{m}$).
+- Removed the legacy `and campus_dist > 5000` condition that previously allowed students within 5km of campus to bypass the lecture radius.
 
-#### OTP-Based Student Enrollment Verification
-- **First-time face enrollment requires identity verification** via institutional email
-- New endpoints:
-  - `POST /api/auth/student/enrollment/request-otp` - Sends 6-digit OTP to student's email
-  - `POST /api/auth/student/enrollment/verify-otp` - Verifies OTP and issues enrollment token
-- Prevents attackers from claiming existing-but-unenrolled student identities
-- Uses Redis for OTP storage with 10-minute TTL
-- Files: `backend/app/routes/auth.py`, `backend/app/routes/checkin.py`
+#### 3. Strict Session Token Validation
+- Check-in tokens strictly resolve to their corresponding active session.
+- Removed fallback queries that previously assigned check-ins to arbitrary active sessions (`.order_by(created_at.desc()).first()`).
 
-#### CI/CD Pipeline
-- **GitHub Actions workflow** for automated testing and security scanning
-- Includes:
-  - Backend tests with PostgreSQL & Redis services
-  - Frontend linting, type checking, and unit tests
-  - Security scanning with Trivy vulnerability scanner
-  - Docker build validation
-  - Dependency security checks (Safety for Python, npm audit for frontend)
+#### 4. Removal of Unverified Biometric Short-Circuit
+- The legacy `payload.biometricVerified` code path (which granted $99\%$ confidence from an untrusted client boolean) has been removed.
+- Attendance records record authoritative `server_blink_verified` status.
 
-#### Faculty Password Security
-- **Secure random password generation** for bulk faculty creation
-- Uses cryptographically secure `secrets` module
-- Generates 16-character passwords with special characters
-- No default or predictable passwords
+#### 5. Atomic Transactions & Direct Persistence
+- Combined session auto-creation and attendance insertion into an atomic transaction with explicit rollback on `IntegrityError` (409 Conflict).
+- Eliminated dangling in-memory references in favor of authoritative PostgreSQL queries for student records and live attendance feeds.
+
+#### 6. httpOnly Cookie Authentication
+- **JWT storage migrated** from localStorage to httpOnly, secure, SameSite=lax cookies.
+- JavaScript cannot read tokens, mitigating XSS token theft.
+- Includes `/api/auth/logout` endpoint to clear cookies server-side.
+
+#### 7. True FIDO2 WebAuthn Server-Side Hardware Assertion
+- **W3C WebAuthn Standards**: End-to-end attestation and assertion verification powered by `webauthn==2.1.0` and `cbor2`.
+- **Anti-Replay Counter Checks**: Authenticator data flags (byte 32 `UP` & `UV`) and 4-byte big-endian signature counters validated against PostgreSQL (`biometric_sign_count`) to strictly prevent token replay and cloning attacks.
+- **Single-Use Challenges**: Cryptographic challenges generated with 180s TTL in Redis and popped atomically on verification.
+
+#### 8. TLS/HTTPS Reverse Proxy & Strict Transport Hardening
+- **Dual-Mode Nginx Listener**: Serves HTTP on port `3000` and HTTPS on port `3443` with HTTP/2 and modern TLS 1.2/1.3 cipher suites.
+- **Zero-Touch Certificate Bootstrap**: Automated 2048-bit RSA self-signed certificates generated on container startup with SANs (`localhost`, `127.0.0.1`, `0.0.0.0`).
+- **Permissions-Policy**: Configured `camera=(self), geolocation=(self), publickey-credentials-get=*, publickey-credentials-create=*` for unrestricted WebAuthn & hardware support on mobile and desktop.
+
+#### 9. High-Performance Redis Background Queue & Status Caching
+- **Asynchronous Task Queue**: Decouples check-in endpoint latency by queueing database audit logs and WebSocket broadcasts to Redis (`smartattend:queue:bg_tasks`).
+- **Student Status Caching**: 60-second Redis caching on `/api/student/check-status/{hall_ticket}` with automatic invalidation whenever attendance is recorded or biometrics are modified.
 
 ### 🛡️ Core Security Features
 
 | Security Layer | Implementation | Status |
-|:---|:---|:---|
-| **GPS Geofencing** | Haversine distance validation, fail-closed on missing coordinates | ✅ Enforced |
+| :--- | :--- | :--- |
+| **GPS Geofencing** | Haversine distance validation, strict session radius | ✅ Enforced |
 | **Face Descriptor Protection** | Raw vectors stripped from public responses | ✅ Protected |
-| **Session Token Validation** | Fail-closed authentication, no auto-backfill | ✅ Enforced |
-| **Rate Limiting** | SlowAPI on critical endpoints (5-10/min) | ✅ Active |
+| **Session Token Validation** | Strict session match, no arbitrary fallback | ✅ Enforced |
+| **Rate Limiting** | SlowAPI on critical endpoints (5–10/min) | ✅ Active |
 | **Cryptographic OTP** | Python `secrets` module, Redis TTL | ✅ Implemented |
 | **Production Guards** | Startup checks for default credentials | ✅ Active |
-| **RBAC Enforcement** | JWT-based role verification on protected endpoints via httpOnly cookies | ✅ Enforced |
-| **Liveness Detection** | Server-side ML temporal EAR analysis with confidence scoring | ✅ Implemented |
-| **JWT Storage** | httpOnly, secure, SameSite=lax cookies (XSS-protected) | ✅ Implemented |
-| **Enrollment Verification** | OTP-based identity verification for first-time face enrollment | ✅ Implemented |
+| **RBAC Enforcement** | JWT-based role verification via httpOnly cookies | ✅ Enforced |
+| **Liveness Detection** | Server-side ML temporal EAR analysis (fail-closed) | ✅ Implemented |
+| **JWT Storage** | httpOnly, secure, SameSite=lax cookies | ✅ Implemented |
+| **Hardware Biometrics** | Server-side FIDO2 WebAuthn + Anti-replay signature counter | ✅ Enforced |
+| **TLS/HTTPS** | Port 3443 with TLS 1.2/1.3 & automated certificate generation | ✅ Active |
+| **Async Task Queue** | Redis background queue for audit logging & WebSocket fanout | ✅ Active |
+| **Status Caching** | 60s Redis cache with auto-invalidation on attendance updates | ✅ Active |
 
 ### 🔐 Production Security Checklist
 

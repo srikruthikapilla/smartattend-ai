@@ -86,11 +86,11 @@ def verify_blink_from_ear_history(ear_history: List[float]) -> ServerBlinkResult
       3. Recovery / reopening (recent EAR returns near or above baseline)
       4. Temporal sanity (rejects flat sequences, negative values, extreme noise)
     """
-    if not ear_history or len(ear_history) < 3:
+    if not ear_history or len(ear_history) < 2:
         return ServerBlinkResult(
             is_valid_blink=False,
             confidence=0.0,
-            reason="Insufficient EAR history samples (minimum 3 required)"
+            reason="Insufficient EAR history samples (minimum 2 required)"
         )
 
     # Convert to clean numpy float array
@@ -127,12 +127,12 @@ def verify_blink_from_ear_history(ear_history: List[float]) -> ServerBlinkResult
     dip_depth = max_ear - min_ear
 
     # 3. Minimum dip threshold (human blink has a distinct contraction)
-    # A true blink creates a minimum dip >= 0.022 in EAR
-    if dip_depth < 0.022:
+    # A true blink creates a minimum dip >= 0.016 in EAR
+    if dip_depth < 0.016:
         return ServerBlinkResult(
             is_valid_blink=False,
             confidence=0.2,
-            reason=f"Insufficient EAR dip depth ({dip_depth:.4f} < 0.022 minimum)",
+            reason=f"Insufficient EAR dip depth ({dip_depth:.4f} < 0.016 minimum)",
             ear_current=round(cur_ear, 4),
             dip_depth=round(dip_depth, 4),
             min_ear=round(min_ear, 4),
@@ -143,9 +143,9 @@ def verify_blink_from_ear_history(ear_history: List[float]) -> ServerBlinkResult
     # or the last frame should have begun reopening
     min_idx = int(np.argmin(ear_arr))
     is_internal_trough = (0 < min_idx < len(ear_arr) - 1)
-    reopened = (cur_ear > min_ear + 0.015) or (cur_ear >= 0.18 and is_internal_trough)
+    reopened = (cur_ear > min_ear + 0.010) or (cur_ear >= 0.15 and is_internal_trough) or (cur_ear > min_ear and len(ear_arr) <= 5)
 
-    if not reopened and cur_ear <= min_ear + 0.008:
+    if not reopened and cur_ear <= min_ear + 0.006:
         return ServerBlinkResult(
             is_valid_blink=False,
             confidence=0.3,
@@ -156,12 +156,12 @@ def verify_blink_from_ear_history(ear_history: List[float]) -> ServerBlinkResult
             max_ear=round(max_ear, 4)
         )
 
-    # 5. Baseline open EAR check (max EAR should represent an open eye, >= 0.18)
-    if max_ear < 0.18:
+    # 5. Baseline open EAR check (max EAR should represent an open eye, >= 0.15)
+    if max_ear < 0.15:
         return ServerBlinkResult(
             is_valid_blink=False,
             confidence=0.3,
-            reason=f"Maximum EAR ({max_ear:.3f}) below open-eye baseline (0.18)",
+            reason=f"Maximum EAR ({max_ear:.3f}) below open-eye baseline (0.15)",
             ear_current=round(cur_ear, 4),
             dip_depth=round(dip_depth, 4),
             min_ear=round(min_ear, 4),
@@ -208,7 +208,7 @@ def verify_live_blink(
             )
 
     # 2. Temporal EAR history analysis
-    if ear_history and len(ear_history) >= 3:
+    if ear_history and len(ear_history) >= 2:
         # If landmark EAR is also provided, ensure the history ends near the landmark EAR
         if landmark_ear is not None:
             # Append or reconcile current landmark EAR
@@ -222,27 +222,26 @@ def verify_live_blink(
 
         return result
 
-    # 3. Fallback: If only landmarks provided
+    # 3. Landmark-only snapshot: anatomical structure alone is NOT a liveness verdict.
+    # A single frame cannot prove a live human blink — fail closed rather than
+    # trusting a client-reported boolean with no temporal telemetry.
     if landmark_ear is not None:
-        # We only have a single snapshot of landmarks; we can confirm valid anatomical structure
-        if 0.15 <= landmark_ear <= 0.45:
+        if not (0.15 <= landmark_ear <= 0.45):
             return ServerBlinkResult(
-                is_valid_blink=client_blink_verified,
-                confidence=0.85 if client_blink_verified else 0.5,
-                reason="Landmarks valid; single frame EAR in anatomical range",
-                ear_current=landmark_ear
+                is_valid_blink=False,
+                confidence=0.0,
+                reason=f"Anomalous facial landmark geometry: EAR={landmark_ear:.3f}"
             )
-
-    # 4. If neither history nor landmarks sent, evaluate client claim
-    if client_blink_verified:
         return ServerBlinkResult(
-            is_valid_blink=True,
-            confidence=0.60,
-            reason="Client reported blink verified (no server-side EAR telemetry attached)"
+            is_valid_blink=False,
+            confidence=0.5,
+            reason="Single-frame landmarks only: insufficient temporal EAR history for liveness. Minimum 3 EAR samples required.",
+            ear_current=landmark_ear
         )
 
+    # 4. No server-side telemetry at all — fail closed, never trust the client claim.
     return ServerBlinkResult(
         is_valid_blink=False,
         confidence=0.0,
-        reason="No blink detected"
+        reason="No blink detected: no EAR history or facial landmarks provided"
     )

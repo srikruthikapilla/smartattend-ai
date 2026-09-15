@@ -13,7 +13,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, or_
+from sqlalchemy.exc import IntegrityError
 
 from app.config import JWT_SECRET
 from app.models.schemas import QRSessionStartPayload
@@ -54,9 +55,17 @@ def start_qr_session(
     faculty_id = str(current_user.get("id") or current_user.get("sub", "faculty_201"))
     faculty_name = payload.facultyName or current_user.get("user_metadata", {}).get("name") or "Faculty Member"
 
-    db_session_id = uuid.uuid4()
+    db_session_id = None
+    if payload.sessionId:
+        try:
+            db_session_id = uuid.UUID(payload.sessionId)
+        except Exception:
+            db_session_id = uuid.uuid4()
+    else:
+        db_session_id = uuid.uuid4()
+
     session_id_str = str(db_session_id)
-    raw_token_id = str(uuid.uuid4())
+    raw_token_id = str(payload.rawToken).strip() if payload.rawToken else str(uuid.uuid4())
     token = generate_signed_token(
         session_id_str,
         faculty_id,
@@ -87,8 +96,10 @@ def start_qr_session(
     # Store token in active history buffer
     valid_session_tokens[raw_token_id] = current_session
     valid_session_tokens[token] = current_session
+    valid_session_tokens[session_id_str] = current_session
 
-    # Persist session to PostgreSQL
+    # Persist session to PostgreSQL — narrow exception handling;
+    # IntegrityError is the expected failure case (duplicate session id).
     try:
         new_sess = AttendanceSession(
             id=db_session_id,
@@ -110,8 +121,13 @@ def start_qr_session(
         )
         db.add(new_sess)
         db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        logger.warning(f"Duplicate session insert: {e}")
     except Exception as e:
-        logger.warning(f"Note: attendance_sessions PostgreSQL sync: {e}")
+        db.rollback()
+        logger.error(f"Session insert failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create check-in session.")
 
     return {
         "success": True,
@@ -132,10 +148,11 @@ def get_current_qr_session(request: Request, db: Session = Depends(get_db)):
         # Check if there is an active session in PostgreSQL
         try:
             now_dt = datetime.now(timezone.utc)
+            cutoff = now_dt - timedelta(hours=4)
             s = (
                 db.query(AttendanceSession)
                 .filter(AttendanceSession.status == "active")
-                .filter(AttendanceSession.end_time > now_dt)
+                .filter(or_(AttendanceSession.end_time == None, AttendanceSession.end_time > now_dt, AttendanceSession.created_at >= cutoff))
                 .order_by(desc(AttendanceSession.created_at))
                 .first()
             )
@@ -155,6 +172,7 @@ def get_current_qr_session(request: Request, db: Session = Depends(get_db)):
                     "createdAt": s.created_at.isoformat() if s.created_at else datetime.now(timezone.utc).isoformat()
                 }
                 valid_session_tokens[raw_tok] = current_session
+                valid_session_tokens[str(s.id)] = current_session
         except Exception as e:
             logger.warning(f"Could not load active session from PostgreSQL: {e}")
 

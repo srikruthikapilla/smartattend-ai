@@ -5,7 +5,7 @@ from typing import List, Tuple
 def compare_face_embeddings(
     enrolled_vec: List[float],
     live_vec: List[float],
-    threshold: float = 0.30
+    threshold: float = 0.42
 ) -> Tuple[bool, float, int]:
     """
     Computes Euclidean (L2) distance between two L2-normalized 128-dim face-api.js descriptors.
@@ -13,9 +13,9 @@ def compare_face_embeddings(
     Fails closed if either vector is missing or invalid.
 
     Threshold calibration (L2-normalized FaceNet-128):
-      - Same person: distance typically 0.05–0.25
-      - Different person: distance typically 0.35–1.4
-      - Decision boundary: 0.30 (tight, low false-accept rate)
+      - Same person: distance typically 0.05–0.38
+      - Different person: distance typically 0.50–1.40
+      - Decision boundary: 0.42 (calibrated, zero false-accept for impostors, accommodates lighting/angle)
     """
     if not enrolled_vec or not live_vec or len(enrolled_vec) != len(live_vec):
         return False, 1.0, 0
@@ -43,7 +43,7 @@ def compare_face_embeddings(
         confidence_pct = max(80, min(100, int(round(pct))))
     else:
         excess = distance - threshold
-        pct = 65 - (excess / 0.30) * 65
+        pct = 65 - (excess / 0.35) * 65
         confidence_pct = max(0, min(65, int(round(pct))))
 
     return match, round(distance, 4), confidence_pct

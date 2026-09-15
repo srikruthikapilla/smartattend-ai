@@ -117,6 +117,7 @@ class Student(Base):
     # WebAuthn / Passkey Biometric Fallback
     biometric_credential_id = Column(Text, nullable=True)
     biometric_public_key = Column(Text, nullable=True)
+    biometric_sign_count = Column(Integer, default=0, nullable=False)
     biometric_enrollment_status = Column(String(50), default="pending")
     biometric_enrolled_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -256,6 +257,7 @@ class AttendanceRecord(Base):
             "marked_at": self.marked_at.isoformat() if self.marked_at else None,
             "status": self.status,
             "verification_method": self.verification_method,
+            "verificationMethod": self.verification_method,
             "face_match_confidence": self.face_match_confidence,
             "face_distance": self.face_distance,
             "blink_verified": self.blink_verified,

@@ -27,7 +27,7 @@ import {
 
 import {
   loadFaceModels,
-} from "../../face/faceApiLoader";
+} from "../../utils/faceApiLoader";
 
 import {
   enrollPlatformBiometrics,

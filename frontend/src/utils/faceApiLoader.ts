@@ -12,10 +12,6 @@ export async function loadFaceModels() {
   ]);
 
   modelsLoaded = true;
-  console.log("Tiny:", faceapi.nets.tinyFaceDetector.isLoaded);
-console.log("Landmark:", faceapi.nets.faceLandmark68Net.isLoaded);
-console.log("Recognition:", faceapi.nets.faceRecognitionNet.isLoaded);
-
   console.log("✅ Face models loaded successfully");
 }
 

@@ -10,6 +10,7 @@ from app.routes.checkin import router as checkin_router, set_sio_server
 from app.routes.attendance import router as attendance_router, set_sio_server as set_attendance_sio
 from app.routes.admin import router as admin_router
 from app.routes.auth import router as auth_router
+from app.routes.webauthn import router as webauthn_router
 
 # ---------------------------------------------------------------------------
 # Rate Limiting (slowapi + Redis)
@@ -118,6 +119,20 @@ async def startup_event():
     except Exception as e:
         print(f"⚠️ [Face AI] Preload note: {e}")
 
+    # Step 3: Start Redis high-performance background queue worker
+    try:
+        import asyncio
+        from app.services.redis_queue import start_queue_worker
+        asyncio.create_task(start_queue_worker(sio))
+    except Exception as e:
+        print(f"⚠️ [Redis Queue] Worker startup note: {e}")
+
+
+@fastapi_app.on_event("shutdown")
+async def shutdown_event():
+    from app.services.redis_queue import stop_queue_worker
+    stop_queue_worker()
+
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
@@ -128,6 +143,7 @@ fastapi_app.include_router(checkin_router)
 fastapi_app.include_router(attendance_router)
 fastapi_app.include_router(admin_router)
 fastapi_app.include_router(auth_router)
+fastapi_app.include_router(webauthn_router)
 
 # ---------------------------------------------------------------------------
 # ASGI wrapper (Socket.io + FastAPI)

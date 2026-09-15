@@ -63,6 +63,7 @@ services:
     restart: always
     ports:
       - "3000:80"
+      - "3443:443"
     depends_on:
       backend:
         condition: service_healthy
