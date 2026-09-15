@@ -238,6 +238,7 @@ class AttendanceRecord(Base):
     gps_distance_meters = Column(Float, nullable=True)
     student_lat = Column(Float, nullable=True)
     student_lng = Column(Float, nullable=True)
+    capture_hash = Column(String(64), nullable=True)
     manual_reason = Column(Text, nullable=True)
     marked_by = Column(String(255), nullable=True)
 
@@ -263,6 +264,7 @@ class AttendanceRecord(Base):
             "blink_verified": self.blink_verified,
             "biometric_verified": self.biometric_verified,
             "gps_distance_meters": self.gps_distance_meters,
+            "capture_hash": self.capture_hash,
             "student_lat": self.student_lat,
             "student_lng": self.student_lng,
             "manual_reason": self.manual_reason,

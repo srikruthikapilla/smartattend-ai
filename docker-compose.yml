@@ -5,6 +5,10 @@ services:
     restart: always
     env_file:
       - ./backend/.env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-smartattend}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Ak}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/db/postgresql_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
@@ -40,6 +44,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-smartattend}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Ak}
+      DOCKER_CONTAINER: "true"
     # Backend is NOT exposed to host — access is via Nginx reverse proxy only
     expose:
       - "5000"

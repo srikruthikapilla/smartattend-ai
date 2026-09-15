@@ -64,6 +64,15 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"}
         )
 
+    # Enforce purpose / type separation: Reject enrollment tokens or non-session tokens
+    token_type = decoded_payload.get("type")
+    if token_type and token_type != "access":
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid token type for session authentication.",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
     user_id = decoded_payload.get("sub") or decoded_payload.get("id") or decoded_payload.get("userId") or decoded_payload.get("email")
     role = decoded_payload.get("role") or decoded_payload.get("user_role") or "student"
 

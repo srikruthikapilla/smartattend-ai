@@ -153,11 +153,10 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
       // 1. Fetch from Backend Reverse Proxy /api/attendance/records
       try {
-        const token = localStorage.getItem('sbit_auth_token');
-        const headers: Record<string, string> = {};
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-
-        const res = await fetch('/api/attendance/records', { headers });
+        const res = await fetch('/api/attendance/records', {
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include'
+        });
         if (res.ok) {
           const data = await res.json();
           if (data && data.records) {
@@ -723,13 +722,10 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     // 2. Persist to Backend API /api/attendance/toggle
     try {
-      const token = localStorage.getItem('sbit_auth_token');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-
       await fetch('/api/attendance/toggle', {
         method: 'POST',
-        headers,
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           studentId,
           hallTicketNo: studentInfo.hallTicketNo,
@@ -783,13 +779,10 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
 
     try {
-      const token = localStorage.getItem('sbit_auth_token');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-
       await fetch('/api/attendance/bulk', {
         method: 'POST',
-        headers,
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           students,
           status
@@ -803,11 +796,10 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const refreshLiveAttendance = async () => {
     let loaded = false;
     try {
-      const token = localStorage.getItem('sbit_auth_token');
-      const headers: Record<string, string> = {};
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-
-      const res = await fetch('/api/attendance/records', { headers });
+      const res = await fetch('/api/attendance/records', {
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include'
+      });
       if (res.ok) {
         const data = await res.json();
         if (data && data.records) {

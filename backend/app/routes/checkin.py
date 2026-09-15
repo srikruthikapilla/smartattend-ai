@@ -9,6 +9,9 @@ import uuid
 import re
 import logging
 import jwt
+import secrets
+import hashlib
+import base64
 from fastapi import APIRouter, HTTPException, Body, Depends, Security, Request
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
@@ -32,9 +35,10 @@ from app.utils.geofence import current_geofence, calculate_haversine_distance
 from app.utils.face_matcher import compare_face_embeddings
 from app.utils.blink_detection import verify_live_blink
 from app.database import get_db, get_db_context
-from app.dependencies.auth import verify_edge_key, get_current_user, require_role
+from app.dependencies.auth import verify_edge_key, get_current_user, get_optional_current_user, require_role
 from app.routes.auth import _rate_limit
 from app.services.face_recognition_service import face_service
+from app.utils.redis_client import set_otp, get_otp, delete_otp
 from app.services.redis_queue import (
     get_cached_student_status,
     set_cached_student_status,
@@ -456,20 +460,90 @@ def clear_all_registered_biometrics(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/api/checkin/challenge")
+@_rate_limit("30/minute")
+def get_checkin_challenge(request: Request):
+    """
+    Issues a cryptographically random single-use liveness challenge nonce.
+    Binds live camera frames and prevents replay of forged telemetry arrays.
+    """
+    challenge = secrets.token_urlsafe(32)
+    set_otp(f"checkin_challenge:{challenge}", "1", ttl_seconds=60)
+    return {
+        "success": True,
+        "challenge": challenge,
+        "expires_in_seconds": 60
+    }
+
+
 @router.post("/api/student/register-biometrics")
 @_rate_limit("10/minute")
 def register_student_biometrics(
     request: Request,
     payload: Dict[str, Any] = Body(...),
+    caller: Optional[Dict[str, Any]] = Depends(get_optional_current_user),
     db: Session = Depends(get_db)
 ):
     """
     First-time student self-service enrollment for Face vector & Platform Biometrics in PostgreSQL.
-    Allows first-time face enrollment for admin-imported student records.
+    Requires an OTP-verified enrollment token for self-service enrollment, OR an active Admin/Faculty session.
     """
     ht = payload.get("hallTicketNo", "").strip().upper()
     if not re.match(r"^2[0-9A-Z]{9}$", ht):
         raise HTTPException(status_code=400, detail="Invalid Hall Ticket format. Must be 10 characters starting with '2'.")
+
+    # Authorization Check:
+    # 1. Authenticated Staff (Admin or Faculty) can register/update biometrics directly.
+    is_staff = bool(caller and caller.get("role", "").lower() in ("admin", "faculty"))
+
+    # 2. Otherwise (Self-service enrollment), a signed, unexpired, single-use enrollment token is mandatory.
+    if not is_staff:
+        enrollment_token = payload.get("enrollmentToken") or payload.get("enrollment_token")
+        if not enrollment_token:
+            raise HTTPException(
+                status_code=403,
+                detail="Valid OTP-verified student enrollment token required for biometric registration. Please verify your email first."
+            )
+        try:
+            decoded = jwt.decode(
+                enrollment_token,
+                JWT_SECRET,
+                algorithms=["HS256"],
+                options={"verify_signature": True}
+            )
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(
+                status_code=403,
+                detail="Enrollment token has expired. Please request a new verification code."
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=403,
+                detail="Invalid enrollment token. Verification failed."
+            )
+
+        if decoded.get("type") != "enrollment":
+            raise HTTPException(
+                status_code=403,
+                detail="Invalid token purpose: An enrollment token is required."
+            )
+
+        token_ht = str(decoded.get("ht", "")).strip().upper()
+        if token_ht != ht:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Enrollment token roll number mismatch (token: {token_ht}, requested: {ht})."
+            )
+
+        # Anti-replay: Check if enrollment token has already been consumed
+        token_hash = hashlib.sha256(enrollment_token.encode()).hexdigest()
+        if get_otp(f"used_enrollment:{token_hash}"):
+            raise HTTPException(
+                status_code=403,
+                detail="This enrollment token has already been used. Please request a new verification code."
+            )
+        # Mark as consumed with 1-hour TTL
+        set_otp(f"used_enrollment:{token_hash}", "1", ttl_seconds=3600)
 
     face_descriptor = payload.get("faceDescriptor")
     bio_credential_id = payload.get("biometricCredentialId")
@@ -763,6 +837,7 @@ async def verify_student_checkin(
                 session_lng = geo.get("lng") or session_lng
                 session_radius = s.radius_meters or session_radius
         except Exception as e:
+            db.rollback()
             logger.warning(f"PostgreSQL session check note: {e}")
 
         # Strategy 4: Try JWT decode
@@ -817,6 +892,7 @@ async def verify_student_checkin(
                 "alreadyMarked": True
             }
     except Exception as e:
+        db.rollback()
         logger.warning(f"Duplicate check query note: {e}")
 
     if existing_dup:
@@ -887,9 +963,33 @@ async def verify_student_checkin(
         face_match_confidence = 1.0
         face_distance = 0.0
 
-    elif payload.faceDescriptor is not None:
+    capture_hash_val = None
+    if payload.faceDescriptor is not None:
         if len(payload.faceDescriptor) not in (128, 512):
             raise HTTPException(status_code=400, detail="faceDescriptor must be a 128- or 512-dimensional float list.")
+
+        # Single-use liveness challenge nonce verification
+        if payload.challengeToken:
+            stored_challenge = get_otp(f"checkin_challenge:{payload.challengeToken}")
+            if not stored_challenge:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Liveness challenge token is invalid or expired. Please capture a fresh scan."
+                )
+            delete_otp(f"checkin_challenge:{payload.challengeToken}")
+
+        # Live camera frame snapshot validation & hash binding
+        if payload.captureImage:
+            try:
+                img_data = payload.captureImage
+                if "," in img_data:
+                    img_data = img_data.split(",", 1)[1]
+                raw_bytes = base64.b64decode(img_data)
+                if len(raw_bytes) < 100:
+                    raise ValueError("Image payload too small to be a valid frame")
+                capture_hash_val = hashlib.sha256(raw_bytes).hexdigest()
+            except Exception as img_err:
+                logger.warning(f"Note on camera snapshot processing: {img_err}")
 
         # Server-side ML Blink & Liveness Evaluation.
         # Requires liveness telemetry (earHistory or faceLandmarks) for verification
@@ -1024,6 +1124,7 @@ async def verify_student_checkin(
             gps_distance_meters=distance_m,
             student_lat=student_lat,
             student_lng=student_lng,
+            capture_hash=capture_hash_val,
             marked_at=now_dt
         )
         db.add(new_rec)

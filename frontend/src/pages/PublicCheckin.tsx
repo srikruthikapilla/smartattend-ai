@@ -19,7 +19,7 @@ import {
   QrCode, MapPin, ScanFace, Eye, CheckCircle2, AlertTriangle,
   Sparkles, Fingerprint, RefreshCw, ArrowRight, User,
   Search, BarChart3, GraduationCap, Calendar, Clock, BookOpen,
-  AlertCircle, Sun, Moon, Check, UserCheck, Camera
+  AlertCircle, Sun, Moon, Check, UserCheck, Camera, Mail, KeyRound
 } from 'lucide-react';
 
 /**
@@ -59,7 +59,7 @@ export const PublicCheckin: React.FC = () => {
   const [hallTicketError, setHallTicketError] = useState<string>('');
 
   // First-Time Enrollment state
-  const [enrollStep, setEnrollStep] = useState<'face' | 'fingerprint' | 'done'>('face');
+  const [enrollStep, setEnrollStep] = useState<'otp' | 'face' | 'fingerprint' | 'done'>('otp');
   const [enrolledFaceDescriptor, setEnrolledFaceDescriptor] = useState<number[] | null>(null);
   const [enrolledBioCredentialId, setEnrolledBioCredentialId] = useState<string | null>(null);
   const [isCapturingFace, setIsCapturingFace] = useState<boolean>(false);
@@ -68,6 +68,16 @@ export const PublicCheckin: React.FC = () => {
     framesCollected: 0, totalFrames: 8, pct: 0, status: 'scanning', message: 'Get ready — center your face'
   });
   const enrollmentStartedRef = useRef<boolean>(false);
+
+  // OTP-Gated Enrollment Security State
+  const [enrollmentToken, setEnrollmentToken] = useState<string | null>(null);
+  const [enrollOtp, setEnrollOtp] = useState<string>('');
+  const [isSendingOtp, setIsSendingOtp] = useState<boolean>(false);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState<boolean>(false);
+  const [otpSent, setOtpSent] = useState<boolean>(false);
+  const [otpMessage, setOtpMessage] = useState<string>('');
+  const [otpMaskedEmail, setOtpMaskedEmail] = useState<string>('');
+  const [otpError, setOtpError] = useState<string>('');
 
   // Geolocation
   const [currentCoords, setCurrentCoords] = useState<{ lat: number; lng: number } | null>(null);
@@ -211,20 +221,84 @@ export const PublicCheckin: React.FC = () => {
         setStep('location_check');
         verifyLocation();
       } else {
-        // Fresh registration: clean any stale browser flags and route to enrollment
+        // Fresh registration: clean any stale flags and require OTP email verification first
         localStorage.removeItem(`enrolled_${formatted}`);
         setEnrolledFaceDescriptor(null);
+        setEnrollmentToken(null);
+        setEnrollOtp('');
+        setOtpSent(false);
+        setOtpError('');
         if (data.profile?.name) setStudentName(data.profile.name);
         enrollmentStartedRef.current = false;
-        setEnrollStep('face');
+        setEnrollStep('otp');
         setStep('first_time_enrollment');
       }
     } catch (err) {
       localStorage.removeItem(`enrolled_${formatted}`);
       setEnrolledFaceDescriptor(null);
+      setEnrollmentToken(null);
+      setEnrollOtp('');
+      setOtpSent(false);
+      setOtpError('');
       enrollmentStartedRef.current = false;
-      setEnrollStep('face');
+      setEnrollStep('otp');
       setStep('first_time_enrollment');
+    }
+  };
+
+  // OTP Verification Handlers
+  const handleRequestEnrollmentOtp = async () => {
+    setIsSendingOtp(true);
+    setOtpError('');
+    try {
+      const resp = await fetch('/api/auth/student/enrollment/request-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hall_ticket_no: hallTicket })
+      });
+      const data = await safeJson(resp);
+      if (resp.ok && data.success) {
+        setOtpSent(true);
+        setOtpMessage(data.message || 'Verification code sent to your email.');
+        setOtpMaskedEmail(data.email_masked || 'your registered institutional email');
+      } else {
+        setOtpError(data.detail || data.message || 'Could not dispatch verification code. Please contact administration.');
+      }
+    } catch (err: any) {
+      setOtpError(err.message || 'Network error while requesting verification code.');
+    } finally {
+      setIsSendingOtp(false);
+    }
+  };
+
+  const handleVerifyEnrollmentOtp = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!enrollOtp || enrollOtp.trim().length !== 6) {
+      setOtpError('Please enter the 6-digit verification code.');
+      return;
+    }
+    setIsVerifyingOtp(true);
+    setOtpError('');
+    try {
+      const resp = await fetch('/api/auth/student/enrollment/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hall_ticket_no: hallTicket,
+          otp: enrollOtp.trim()
+        })
+      });
+      const data = await safeJson(resp);
+      if (resp.ok && data.success && data.enrollment_token) {
+        setEnrollmentToken(data.enrollment_token);
+        setEnrollStep('face');
+      } else {
+        setOtpError(data.detail || data.message || 'Invalid or expired verification code.');
+      }
+    } catch (err: any) {
+      setOtpError(err.message || 'Network error while verifying code.');
+    } finally {
+      setIsVerifyingOtp(false);
     }
   };
 
@@ -241,7 +315,8 @@ export const PublicCheckin: React.FC = () => {
         branch: studentBranch,
         section: 'A',
         faceDescriptor: descriptor,
-        biometricCredentialId: enrolledBioCredentialId || null
+        biometricCredentialId: enrolledBioCredentialId || null,
+        enrollmentToken: enrollmentToken
       })
     });
     const data = await safeJson(resp);
@@ -549,6 +624,29 @@ export const PublicCheckin: React.FC = () => {
     setStep('verifying');
 
     try {
+      // 1. Fetch ephemeral server liveness challenge nonce
+      let challengeToken: string | undefined = undefined;
+      try {
+        const cResp = await fetch('/api/checkin/challenge');
+        if (cResp.ok) {
+          const cData = await safeJson(cResp);
+          if (cData?.challenge) challengeToken = cData.challenge;
+        }
+      } catch (cErr) {
+        console.warn('Challenge nonce fetch note:', cErr);
+      }
+
+      // 2. Capture live camera frame snapshot at blink moment
+      let captureImage: string | undefined = undefined;
+      try {
+        if (webcamRef.current) {
+          const snap = webcamRef.current.getScreenshot();
+          if (snap) captureImage = snap;
+        }
+      } catch (sErr) {
+        console.warn('Camera snapshot capture note:', sErr);
+      }
+
       const payload: Record<string, any> = {
         token: token || '',
         hallTicket,
@@ -560,7 +658,9 @@ export const PublicCheckin: React.FC = () => {
         blinkVerified: isBlinkVerified,
         biometricVerified: isBiometricFallback,
         studentName: studentName || `Student (${hallTicket})`,
-        webauthnAssertion: webauthnAssertion || null
+        webauthnAssertion: webauthnAssertion || null,
+        challengeToken: challengeToken || null,
+        captureImage: captureImage || null
       };
 
       const resp = await fetch('/api/checkin/verify', {
@@ -788,9 +888,103 @@ export const PublicCheckin: React.FC = () => {
                     <span>First-Time Face Registration</span>
                   </div>
                   <p className="text-xs text-slate-600 dark:text-slate-400">
-                    Roll Number: <strong className="font-mono text-teal-600 dark:text-teal-400">{hallTicket}</strong>. Position your face in the camera frame to register your profile.
+                    Roll Number: <strong className="font-mono text-teal-600 dark:text-teal-400">{hallTicket}</strong>. Complete verification to enroll your biometric profile securely.
                   </p>
                 </div>
+
+                {/* Sub-step 0: OTP Email Identity Verification */}
+                {enrollStep === 'otp' && (
+                  <div className="space-y-4 text-left">
+                    <div className="p-4 rounded-2xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200/80 dark:border-indigo-800/50 space-y-2">
+                      <div className="flex items-center gap-2 text-xs font-bold text-indigo-900 dark:text-indigo-200 font-heading">
+                        <KeyRound className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                        <span>Institutional Verification Required</span>
+                      </div>
+                      <p className="text-xs text-indigo-700 dark:text-indigo-300 leading-relaxed">
+                        To protect your identity and prevent unauthorized enrollment, a 6-digit verification code will be sent to your institutional email.
+                      </p>
+                    </div>
+
+                    {!otpSent ? (
+                      <div className="space-y-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={handleRequestEnrollmentOtp}
+                          disabled={isSendingOtp}
+                          className="w-full bg-slate-900 dark:bg-white hover:bg-slate-800 dark:hover:bg-slate-100 text-white dark:text-slate-900 font-bold py-3.5 px-4 rounded-xl text-xs uppercase tracking-wider transition-all shadow-sm flex items-center justify-center gap-2 font-heading disabled:opacity-50"
+                        >
+                          {isSendingOtp ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                              <span>Sending Verification Code...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Mail className="w-4 h-4 text-indigo-500" />
+                              <span>Send Verification Code to Institutional Email</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    ) : (
+                      <form onSubmit={handleVerifyEnrollmentOtp} className="space-y-4 pt-1">
+                        <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 text-xs text-emerald-800 dark:text-emerald-300">
+                          {otpMessage || `Code dispatched to ${otpMaskedEmail}`}
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 font-heading">
+                            Enter 6-Digit Verification Code
+                          </label>
+                          <input
+                            type="text"
+                            maxLength={6}
+                            value={enrollOtp}
+                            onChange={(e) => setEnrollOtp(e.target.value.replace(/\D/g, ''))}
+                            placeholder="123456"
+                            className="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono text-center tracking-widest text-lg font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
+                            autoFocus
+                          />
+                        </div>
+
+                        <div className="flex gap-2.5">
+                          <button
+                            type="button"
+                            onClick={handleRequestEnrollmentOtp}
+                            disabled={isSendingOtp}
+                            className="w-1/3 py-3 px-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-bold font-heading hover:bg-slate-50 dark:hover:bg-slate-800 transition disabled:opacity-50"
+                          >
+                            Resend
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={isVerifyingOtp || enrollOtp.trim().length !== 6}
+                            className="w-2/3 bg-slate-900 dark:bg-white hover:bg-slate-800 dark:hover:bg-slate-100 text-white dark:text-slate-900 font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider transition font-heading flex items-center justify-center gap-2 disabled:opacity-50"
+                          >
+                            {isVerifyingOtp ? (
+                              <>
+                                <RefreshCw className="w-4 h-4 animate-spin" />
+                                <span>Verifying...</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>Verify & Proceed to Face Scan</span>
+                                <ArrowRight className="w-4 h-4" />
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </form>
+                    )}
+
+                    {otpError && (
+                      <div className="flex items-start gap-2 px-3.5 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-300">
+                        <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                        <span>{otpError}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Sub-step 1: Face ID-style Scanner */}
                 {enrollStep === 'face' && (

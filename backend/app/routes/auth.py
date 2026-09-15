@@ -8,6 +8,7 @@ Student accounts are passwordless roster records.
 
 import os
 import secrets
+import string
 import time
 import uuid
 import logging
@@ -253,15 +254,10 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
     # 1. Check Administrator Account
     admin = db.query(Admin).filter(func.lower(Admin.email) == clean_email).first()
     if admin:
-        if not verify_password(payload.password, admin.password_hash):
+        if not verify_password(payload.password, admin.password_hash) or (payload.role and payload.role.lower() != "admin"):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid email or password."
-            )
-        if payload.role and payload.role.lower() != "admin":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Account is registered as 'ADMIN', not '{payload.role.upper()}'."
             )
 
         user_id = str(admin.id)
@@ -271,6 +267,7 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
             "email": admin.email,
             "name": admin.name,
             "role": "admin",
+            "type": "access",
             "exp": int(time.time()) + (8 * 3600)  # 8-hour session
         }
         access_token = pyjwt.encode(token_payload, JWT_SECRET, algorithm="HS256")
@@ -286,25 +283,19 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
             samesite=COOKIE_SAMESITE
         )
         
+        # Return user profile without leaking JWT in response body
         return {
             "success": True,
-            "token": access_token,
-            "access_token": access_token,
             "user": admin.to_dict()
         }
 
     # 2. Check Faculty Account
     faculty = db.query(Faculty).filter(func.lower(Faculty.email) == clean_email).first()
     if faculty:
-        if not verify_password(payload.password, faculty.password_hash):
+        if not verify_password(payload.password, faculty.password_hash) or (payload.role and payload.role.lower() != "faculty"):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid email or password."
-            )
-        if payload.role and payload.role.lower() != "faculty":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Account is registered as 'FACULTY', not '{payload.role.upper()}'."
             )
         if faculty.status != "approved":
             raise HTTPException(
@@ -319,6 +310,7 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
             "email": faculty.email,
             "name": faculty.name,
             "role": "faculty",
+            "type": "access",
             "exp": int(time.time()) + (8 * 3600)  # 8-hour session
         }
         access_token = pyjwt.encode(token_payload, JWT_SECRET, algorithm="HS256")
@@ -334,25 +326,14 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
             samesite=COOKIE_SAMESITE
         )
         
+        # Return user profile without leaking JWT in response body
         return {
             "success": True,
-            "token": access_token,
-            "access_token": access_token,
             "user": faculty.to_dict()
         }
 
-    # 3. Check Student Account (Students do not use password login)
-    student = db.query(Student).filter(
-        (func.lower(Student.email) == clean_email) |
-        (func.upper(Student.hall_ticket_no) == clean_email.upper())
-    ).first()
-    if student:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Student password login is disabled. Attendance is recorded via Face AI verification or Faculty QR check-in."
-        )
-
-    # 4. Fail closed
+    # 3. Fail closed uniformly on any other account / student attempts / unknown emails.
+    # Uniform 401 prevents account enumeration between admin, faculty, student, and non-existent emails.
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid email or password."
@@ -378,14 +359,10 @@ def register_user(
     target_role = payload.role.lower() if payload.role else "student"
 
     if target_role in ["admin", "faculty"] and not is_admin:
-        admin_count = db.query(Admin).count()
-        if target_role == "admin" and admin_count == 0:
-            pass  # Allow initial bootstrap admin creation
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Only an authenticated Administrator can register '{target_role}' accounts. Please log in as an administrator first."
-            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Only an authenticated Administrator can register '{target_role}' accounts. Please log in as an administrator first."
+        )
 
     # 1. Admin Registration
     if target_role == "admin":
@@ -675,8 +652,6 @@ def bulk_upsert_faculty(
             continue
 
         existing = db.query(Faculty).filter(func.lower(Faculty.email) == clean_email).first()
-        import secrets
-        import string
         # Generate a strong random temporary password if none provided
         if f.password and len(f.password) >= 8:
             pwd = f.password
@@ -737,16 +712,8 @@ def request_password_reset(request: Request, payload: RequestResetRequest, db: S
         db.query(Faculty).filter(func.lower(Faculty.email) == clean_email).first()
     )
 
-    # Check if student requested
-    student = db.query(Student).filter(func.lower(Student.email) == clean_email).first()
-    if student:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Password reset is not applicable to student accounts. Students check in via Face AI or Kiosk."
-        )
-
     if not user:
-        # Return generic message to prevent email enumeration
+        # Return generic message to prevent email enumeration (for unknown emails and student accounts)
         return {
             "success": True,
             "message": "If an administrator or faculty account exists with this email, a verification code has been dispatched.",

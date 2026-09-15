@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS attendance_records (
     gps_distance_meters FLOAT,
     student_lat FLOAT,
     student_lng FLOAT,
+    capture_hash VARCHAR(64),
     manual_reason TEXT,
     marked_by VARCHAR(255),
     CONSTRAINT unique_session_checkin UNIQUE (session_id, hall_ticket_no)

@@ -70,6 +70,8 @@ class VerifyCheckinPayload(BaseModel):
     blinkVerified: Optional[bool] = False
     biometricVerified: Optional[bool] = False
     webauthnAssertion: Optional[Dict[str, Any]] = None
+    challengeToken: Optional[str] = None
+    captureImage: Optional[str] = None
 
     @field_validator("hallTicket")
     @classmethod

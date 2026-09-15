@@ -64,13 +64,13 @@ def get_register_options(
     student = db.query(Student).filter(Student.hall_ticket_no == ht).first()
     
     student_name = payload.name or (student.name if student else f"Student ({ht})")
-    student_email = payload.email or (student.email if student and student.email else f"{ht.lower()}@sbit.ac.in")
+    student_email = payload.email or (student.email if student and student.email else None)
 
     origin = request.headers.get("origin") or str(request.base_url)
     options = generate_registration_options(
         user_id=ht,
         user_name=student_name,
-        user_email=student_email,
+        user_email=student_email or ht.lower(),
         origin=origin
     )
     return {"success": True, "options": options}
@@ -101,11 +101,11 @@ def verify_registration(
 
     student = db.query(Student).filter(Student.hall_ticket_no == ht).first()
     if not student:
-        # Create student record if not existing yet
+        # Create student record if not existing yet (no default email if user did not provide one)
         student = Student(
             hall_ticket_no=ht,
             name=f"Student ({ht})",
-            email=f"{ht.lower()}@sbit.ac.in",
+            email=None,
             branch="CSE",
             section="A"
         )

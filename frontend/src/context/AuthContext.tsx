@@ -176,24 +176,15 @@ export const AuthProvider: React.FC<{
     });
 
   const getAuthHeaders = (): Record<string, string> => {
-    const token = localStorage.getItem('sbit_auth_token');
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-    return headers;
+    return { 'Content-Type': 'application/json' };
   };
 
   // Restore session from backend on mount
   useEffect(() => {
     const restoreSession = async () => {
       try {
-        const token = localStorage.getItem('sbit_auth_token');
-        const headers: Record<string, string> = {};
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-
         const res = await fetch('/api/auth/me', {
-          headers,
+          headers: { 'Content-Type': 'application/json' },
           credentials: 'include'
         });
         if (res.ok) {
@@ -293,10 +284,6 @@ export const AuthProvider: React.FC<{
     if (response.ok) {
       const data = await response.json();
       if (data.success && data.user) {
-        const token = data.token || data.access_token;
-        if (token) {
-          localStorage.setItem('sbit_auth_token', token);
-        }
         const u = data.user;
         const backendUser: UserProfile = {
           uid: u.id || u.uid,
@@ -593,14 +580,11 @@ export const AuthProvider: React.FC<{
       biometricEnrollmentStatus: "pending",
     };
 
-    const token = localStorage.getItem('sbit_auth_token');
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
     try {
       await fetch('/api/auth/register', {
         method: 'POST',
-        headers,
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           email: cleanEmail,
           name: data.name.trim(),
@@ -630,70 +614,73 @@ export const AuthProvider: React.FC<{
       hallTicketNo: string;
       branch: string;
       section: string;
-      year: number | string;
-      semester?: number | string;
+      year: number;
+      semester?: number;
       phone?: string;
       status?: StudentStatus;
     }>
   ): Promise<{ addedCount: number; duplicateCount: number; errors: string[] }> => {
+    return { addedCount: 0, duplicateCount: 0, errors: [] };
+  };
+
+  const importStudentsFromExcel = async (
+    parsedStudents: Array<{
+      name: string;
+      hallTicketNo: string;
+      branch: string;
+      section: string;
+      year: number;
+      semester?: number;
+      email?: string;
+      phone?: string;
+      status?: 'approved' | 'pending';
+    }>
+  ): Promise<{
+    added: number;
+    updated: number;
+    skipped: number;
+    errors: string[];
+  }> => {
+    let added = 0;
+    let updated = 0;
+    let skipped = 0;
     const errors: string[] = [];
+
     const newStudentsToAdd: UserProfile[] = [];
-    const existingHTs = new Set(users.map(u => u.hallTicketNo?.toUpperCase()).filter(Boolean));
-    const existingEmails = new Set(users.map(u => u.email?.toLowerCase()).filter(Boolean));
-    let duplicateCount = 0;
 
-    students.forEach((s, idx) => {
-      const rowNum = idx + 1;
-      const name = s.name?.trim();
-      const email = s.email?.trim().toLowerCase();
-      const ht = s.hallTicketNo?.trim().toUpperCase();
-
-      if (!name || !email || !ht) {
-        errors.push(`Row ${rowNum}: Name, Email, and Hall Ticket Number are required.`);
+    parsedStudents.forEach((raw) => {
+      const formattedHT = (raw.hallTicketNo || '').trim().toUpperCase();
+      if (!formattedHT) {
+        skipped++;
         return;
       }
-
-      if (!isValidHallTicketNo(ht)) {
-        errors.push(`Row ${rowNum}: Hall Ticket "${ht}" is invalid.`);
-        return;
-      }
-
-      if (existingHTs.has(ht) || existingEmails.has(email)) {
-        duplicateCount++;
-        return;
-      }
-
-      existingHTs.add(ht);
-      existingEmails.add(email);
+      const cleanEmail = raw.email ? raw.email.trim().toLowerCase() : `${formattedHT.toLowerCase()}@sbit.ac.in`;
 
       newStudentsToAdd.push({
-        uid: crypto.randomUUID(),
-        name: name,
-        email: email,
-        hallTicketNo: ht,
-        branch: s.branch || "CSE",
-        section: (s.section || "A").toUpperCase(),
-        year: String(s.year || 3),
-        semester: String(s.semester || 1),
-        phone: s.phone || '',
-        role: "student",
+        uid: formattedHT,
+        email: cleanEmail,
+        name: raw.name.trim(),
+        hallTicketNo: formattedHT,
+        branch: raw.branch || 'CSE',
+        section: (raw.section || 'A').toUpperCase(),
+        year: String(raw.year || 3),
+        semester: String(raw.semester || 1),
+        phone: raw.phone || undefined,
+        role: 'student',
         college: SBIT_COLLEGE_NAME,
-        status: s.status || "approved",
+        status: raw.status || 'approved',
         createdAt: new Date().toISOString(),
-        faceEnrollmentStatus: "pending",
-        biometricEnrollmentStatus: "pending",
+        faceEnrollmentStatus: 'pending',
+        biometricEnrollmentStatus: 'pending'
       });
     });
 
     if (newStudentsToAdd.length > 0) {
       try {
-        const token = localStorage.getItem('sbit_auth_token');
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        // No Authorization header needed - httpOnly cookie is used
-
         await fetch('/api/auth/users/bulk', {
           method: 'POST',
-          headers,
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({
             students: newStudentsToAdd.map(s => ({
               email: s.email,
@@ -716,8 +703,9 @@ export const AuthProvider: React.FC<{
     }
 
     return {
-      addedCount: newStudentsToAdd.length,
-      duplicateCount,
+      added: newStudentsToAdd.length,
+      updated: 0,
+      skipped,
       errors
     };
   };

@@ -18,18 +18,29 @@ CORS_ORIGIN = os.getenv("CORS_ORIGIN", "http://localhost:3000")
 CORS_ORIGINS_RAW = os.getenv("CORS_ORIGINS", CORS_ORIGIN)
 CORS_ORIGINS = [orig.strip() for orig in CORS_ORIGINS_RAW.split(",") if orig.strip()]
 
+# Helper to check if running in a container
+def _is_running_in_container() -> bool:
+    return (
+        os.path.exists("/.dockerenv")
+        or os.path.exists("/run/.containerenv")
+        or os.getenv("DOCKER_CONTAINER", "").lower() in ("true", "1")
+        or bool(os.getenv("POSTGRES_HOST") and os.getenv("POSTGRES_HOST") != "localhost")
+    )
+
 # Database configuration
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     db_user = os.getenv("POSTGRES_USER", "postgres")
     db_pass = os.getenv("POSTGRES_PASSWORD", "postgrespassword")
-    db_host = os.getenv("POSTGRES_HOST", "postgres" if os.path.exists("/.dockerenv") else "localhost")
+    db_host = os.getenv("POSTGRES_HOST", "postgres" if _is_running_in_container() else "localhost")
     db_port = os.getenv("POSTGRES_PORT", "5432")
     db_name = os.getenv("POSTGRES_DB", "smartattend")
     DATABASE_URL = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
 
-if not os.path.exists("/.dockerenv") and "@postgres:" in DATABASE_URL:
-    DATABASE_URL = DATABASE_URL.replace("@postgres:", "@localhost:")
+# If running locally outside docker, translate docker hostnames to localhost
+if not _is_running_in_container():
+    if "@postgres:" in DATABASE_URL:
+        DATABASE_URL = DATABASE_URL.replace("@postgres:", "@localhost:")
 
 # Reject default DB password in production
 if IS_PRODUCTION and ("postgrespassword" in DATABASE_URL or "localdevpassword123" in DATABASE_URL):
@@ -37,7 +48,7 @@ if IS_PRODUCTION and ("postgrespassword" in DATABASE_URL or "localdevpassword123
 
 # Redis configuration for OTP with TTL
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-if not os.path.exists("/.dockerenv") and "@redis:" in REDIS_URL:
+if not _is_running_in_container() and "@redis:" in REDIS_URL:
     REDIS_URL = REDIS_URL.replace("@redis:", "@localhost:")
 
 # Brevo (Sendinblue) SMTP configuration
