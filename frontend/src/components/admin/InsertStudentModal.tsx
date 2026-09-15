@@ -61,15 +61,12 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
   const [bulkError, setBulkError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-generate email when Hall Ticket is entered
+  // Format Hall Ticket when entered
   const handleHTChange = (ht: string) => {
     const formatted = ht.toUpperCase();
     setSingleForm(prev => ({
       ...prev,
-      hallTicketNo: formatted,
-      email: prev.email === '' || prev.email.endsWith('@sbit.ac.in') 
-        ? `${formatted.toLowerCase()}@sbit.ac.in` 
-        : prev.email
+      hallTicketNo: formatted
     }));
   };
 
@@ -78,18 +75,25 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
     e.preventDefault();
     setSingleError(null);
     setSingleSuccess(null);
+
+    const cleanEmail = singleForm.email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@') || !cleanEmail.includes('.')) {
+      setSingleError('Student email is mandatory and must be a valid email address.');
+      return;
+    }
+
     setSingleLoading(true);
 
     try {
       const created = await insertStudent({
-        name: singleForm.name,
-        email: singleForm.email,
-        hallTicketNo: singleForm.hallTicketNo,
+        name: singleForm.name.trim(),
+        email: cleanEmail,
+        hallTicketNo: singleForm.hallTicketNo.trim().toUpperCase(),
         branch: singleForm.branch,
         section: singleForm.section,
         year: Number(singleForm.year),
         semester: Number(singleForm.semester),
-        phone: singleForm.phone,
+        phone: singleForm.phone.trim(),
         status: singleForm.status
       });
 
@@ -237,7 +241,7 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
           ).toString().trim();
 
           // Flexible header resolution for Email
-          let email = (
+          const email = (
             normalized['email'] ||
             normalized['emailaddress'] ||
             normalized['mail'] ||
@@ -245,12 +249,13 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
             ''
           ).toString().trim().toLowerCase();
 
-          if (!email && rawHT) {
-            email = `${rawHT.toLowerCase()}@sbit.ac.in`;
-          }
-
           if (!name || !rawHT) {
             errors.push(`Row ${idx + 2}: Missing required Name or Roll Number / Hall Ticket`);
+            return;
+          }
+
+          if (!email || !email.includes('@') || !email.includes('.')) {
+            errors.push(`Row ${idx + 2}: Student email is mandatory. Missing or invalid email for "${rawHT}" (${name})`);
             return;
           }
 
@@ -314,6 +319,7 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
       {
         'Hall Ticket No': '24M61A6601',
         'Full Name': 'K. Rahul Kumar',
+        'Email': 'rahul.kumar@gmail.com',
         'Branch': 'CSM',
         'Section': 'A',
         'Year': 3,
@@ -323,6 +329,7 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
       {
         'Hall Ticket No': '24M61A6602',
         'Full Name': 'M. Sneha Reddy',
+        'Email': 'sneha.reddy@gmail.com',
         'Branch': 'CSM',
         'Section': 'A',
         'Year': 3,
@@ -332,6 +339,7 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
       {
         'Hall Ticket No': '24M61A6603',
         'Full Name': 'P. Sai Teja',
+        'Email': 'sai.teja@gmail.com',
         'Branch': 'CSM',
         'Section': 'B',
         'Year': 3,
@@ -401,7 +409,7 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Hall Ticket Number */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1 font-heading">
@@ -429,6 +437,21 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
                   value={singleForm.name}
                   onChange={(e) => setSingleForm({ ...singleForm, name: e.target.value })}
                   placeholder="e.g. Rahul Kumar"
+                  required
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              {/* Student Email */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1 font-heading">
+                  Student Email *
+                </label>
+                <input
+                  type="email"
+                  value={singleForm.email}
+                  onChange={(e) => setSingleForm({ ...singleForm, email: e.target.value })}
+                  placeholder="student@gmail.com"
                   required
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500"
                 />

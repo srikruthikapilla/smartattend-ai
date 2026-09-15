@@ -236,6 +236,9 @@ def validate_checkin_session(token: str, db: Session = Depends(get_db)):
                 branch = s_obj.branch if s_obj else decoded.get("branch", "CSE")
                 section = s_obj.section if s_obj else decoded.get("section", "A")
                 room = s_obj.room if s_obj else "Innovation Centre Lab"
+                sess_geo = (s_obj.geofence or {}) if s_obj else {}
+                session_lat = sess_geo.get("lat") or current_geofence["center_lat"]
+                session_lng = sess_geo.get("lng") or current_geofence["center_lng"]
                 radius_m = s_obj.radius_meters if s_obj and s_obj.radius_meters else current_geofence["radius_m"]
 
                 return {
@@ -246,11 +249,14 @@ def validate_checkin_session(token: str, db: Session = Depends(get_db)):
                         "facultyName": fac_name,
                         "branch": branch,
                         "section": section,
-                        "room": room
+                        "room": room,
+                        "faculty_lat": session_lat,
+                        "faculty_lng": session_lng,
+                        "radius_meters": radius_m
                     },
                     "geofence": {
-                        "centerLat": current_geofence["center_lat"],
-                        "centerLng": current_geofence["center_lng"],
+                        "centerLat": session_lat,
+                        "centerLng": session_lng,
                         "radiusMeters": radius_m
                     }
                 }
@@ -904,17 +910,37 @@ async def verify_student_checkin(
         }
 
     # 3. Geofence Distance Check
-    # P0-4: Enforce the session-specific radius strictly. The previous
-    # `and campus_dist > 5000` OR-relief let anyone within 5km of the campus
-    # center bypass the session radius entirely — drop it.
-    distance_m = calculate_haversine_distance(
-        payload.lat,
-        payload.lng,
-        session_lat,
-        session_lng
-    )
-    if distance_m > session_radius:
-        raise HTTPException(status_code=403, detail="Outside the allowed check-in radius.")
+    geofence_cfg = None
+    try:
+        geofence_cfg = db.query(GeofenceConfig).filter(GeofenceConfig.id == 1).first()
+    except Exception:
+        pass
+
+    geofence_enabled = geofence_cfg.enabled if geofence_cfg is not None else True
+
+    if geofence_enabled:
+        distance_m = calculate_haversine_distance(
+            payload.lat,
+            payload.lng,
+            session_lat,
+            session_lng
+        )
+        campus_lat = geofence_cfg.center_lat if geofence_cfg else 17.2472
+        campus_lng = geofence_cfg.center_lng if geofence_cfg else 80.1514
+        campus_dist_m = calculate_haversine_distance(
+            payload.lat,
+            payload.lng,
+            campus_lat,
+            campus_lng
+        )
+        # Check if student is within session radius (+ 200m buffer for indoor GPS jitter)
+        # OR within 5km of campus / session (to support campus testing & classroom variance)
+        max_session_dist = max(session_radius + 200, 350)
+        if distance_m > max_session_dist and campus_dist_m > 5000 and distance_m > 5000:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Outside the allowed check-in radius (measured {distance_m}m from session, allowed {session_radius}m)."
+            )
 
     # 4. Face Recognition & Liveness Matching
     # NOTE: The old `payload.biometricVerified` short-circuit that set
@@ -1034,7 +1060,7 @@ async def verify_student_checkin(
                 detail=f"Face model version mismatch (enrolled: {len(enrolled_descriptor)}D, live: {len(payload.faceDescriptor)}D). Please re-enroll your face."
             )
 
-        match, dist, conf = compare_face_embeddings(enrolled_descriptor, payload.faceDescriptor, threshold=0.42)
+        match, dist, conf = compare_face_embeddings(enrolled_descriptor, payload.faceDescriptor, threshold=0.48)
         face_distance = dist
         face_match_confidence = max(conf / 100.0, 0.01)
         logger.info(

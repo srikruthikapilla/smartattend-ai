@@ -499,7 +499,10 @@ export const AuthProvider: React.FC<{
       "uid" | "role" | "status" | "createdAt"
     >
   ): Promise<UserProfile> => {
-    const cleanEmail = data.email.toLowerCase().trim();
+    const cleanEmail = (data.email || '').toLowerCase().trim();
+    if (!cleanEmail || !cleanEmail.includes('@') || !cleanEmail.includes('.')) {
+      throw new Error("A valid student email address is mandatory.");
+    }
     const formattedHT = (data.hallTicketNo || '').trim().toUpperCase();
 
     let uid: string = crypto.randomUUID();
@@ -558,7 +561,10 @@ export const AuthProvider: React.FC<{
       status?: StudentStatus;
     }
   ): Promise<UserProfile> => {
-    const cleanEmail = data.email.toLowerCase().trim();
+    const cleanEmail = (data.email || '').toLowerCase().trim();
+    if (!cleanEmail || !cleanEmail.includes('@') || !cleanEmail.includes('.')) {
+      throw new Error("A valid student email address is mandatory.");
+    }
     const formattedHT = data.hallTicketNo.trim().toUpperCase();
     let uid = crypto.randomUUID();
 

@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS students (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     hall_ticket_no VARCHAR(50) UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
-    email VARCHAR(255) UNIQUE,
+    email VARCHAR(255) UNIQUE NOT NULL,
     phone VARCHAR(50),
     role VARCHAR(50) NOT NULL DEFAULT 'student',
     branch VARCHAR(50) DEFAULT 'CSM',

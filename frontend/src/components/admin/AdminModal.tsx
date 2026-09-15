@@ -18,12 +18,13 @@ import {
 interface AdminModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: 'list' | 'add';
 }
 
-export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose }) => {
+export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, initialTab = 'add' }) => {
   const { users, currentUser, registerAdmin, deleteUser, refreshUsers } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'list' | 'add'>('list');
+  const [activeTab, setActiveTab] = useState<'list' | 'add'>(initialTab);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -32,6 +33,14 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (isOpen) {
+      setActiveTab(initialTab);
+      setError(null);
+      setSuccessMsg(null);
+    }
+  }, [isOpen, initialTab]);
 
   if (!isOpen) return null;
 

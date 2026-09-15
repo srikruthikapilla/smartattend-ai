@@ -366,6 +366,12 @@ def register_user(
 
     # 1. Admin Registration
     if target_role == "admin":
+        if not clean_email or "@" not in clean_email or "." not in clean_email.split("@")[-1]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A valid administrator email address is strictly mandatory."
+            )
+
         existing = db.query(Admin).filter(func.lower(Admin.email) == clean_email).first()
         if existing:
             if payload.password:
@@ -397,6 +403,12 @@ def register_user(
 
     # 2. Faculty Registration
     elif target_role == "faculty":
+        if not clean_email or "@" not in clean_email or "." not in clean_email.split("@")[-1]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A valid faculty email address is strictly mandatory."
+            )
+
         existing = db.query(Faculty).filter(func.lower(Faculty.email) == clean_email).first()
         if existing:
             if payload.password:
@@ -435,6 +447,12 @@ def register_user(
 
     # 3. Student Registration (Passwordless Roster Record)
     else:
+        if not clean_email or "@" not in clean_email or "." not in clean_email.split("@")[-1]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A valid student email address is strictly mandatory."
+            )
+
         if not clean_ht:
             raise HTTPException(status_code=400, detail="Hall ticket number is required for student registration.")
 
@@ -594,10 +612,10 @@ def bulk_upsert_users(
     now_dt = datetime.now(timezone.utc)
 
     for st in payload.students:
-        clean_email = st.email.strip().lower()
+        clean_email = (st.email or "").strip().lower()
         clean_ht = st.hall_ticket_no.strip().upper() if st.hall_ticket_no else None
 
-        if not clean_ht:
+        if not clean_email or "@" not in clean_email or not clean_ht:
             continue
 
         existing = db.query(Student).filter(

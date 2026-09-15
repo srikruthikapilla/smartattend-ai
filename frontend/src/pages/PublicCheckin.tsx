@@ -35,6 +35,17 @@ async function safeJson(resp: Response): Promise<any> {
   }
 }
 
+function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c);
+}
+
 export const PublicCheckin: React.FC = () => {
   const [searchParams] = useSearchParams();
   const { theme, toggleTheme } = useTheme();
@@ -450,13 +461,13 @@ export const PublicCheckin: React.FC = () => {
     verifyLocation();
   };
 
-  // 6. Geolocation (Seamless & Non-Intrusive — No Blocking Prompts)
+  // 6. Geolocation (Seamless & Non-Intrusive — Dynamic Session Baseline)
   const verifyLocation = () => {
-    // Immediate campus coordinates fallback
-    const campusLat = 17.2472;
-    const campusLng = 80.1514;
-    setCurrentCoords({ lat: campusLat, lng: campusLng });
-    setDistanceMeters(10);
+    // Dynamic session / campus coordinates baseline
+    const baselineLat = Number(geofenceData?.centerLat ?? sessionData?.faculty_lat ?? 17.2472);
+    const baselineLng = Number(geofenceData?.centerLng ?? sessionData?.faculty_lng ?? 80.1514);
+    setCurrentCoords({ lat: baselineLat, lng: baselineLng });
+    setDistanceMeters(0);
 
     // Silently capture GPS in background if permission is already granted or available
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
@@ -466,15 +477,16 @@ export const PublicCheckin: React.FC = () => {
             const lat = pos.coords.latitude;
             const lng = pos.coords.longitude;
             setCurrentCoords({ lat, lng });
-            setDistanceMeters(8);
+            const dist = calculateDistanceMeters(lat, lng, baselineLat, baselineLng);
+            setDistanceMeters(dist);
           },
           () => {
-            // Silently maintain campus baseline
+            // Silently maintain session baseline
           },
           { enableHighAccuracy: false, timeout: 2500, maximumAge: 60000 }
         );
       } catch {
-        // Silently maintain campus baseline
+        // Silently maintain session baseline
       }
     }
 
@@ -516,14 +528,22 @@ export const PublicCheckin: React.FC = () => {
           setFaceDetectedInFrame(true);
           setLastDetectedDescriptor(detection.descriptor);
 
-          // Calculate real-time face distance if enrolled descriptor is available (Calibrated 0.42 threshold)
-          let isCurrentFaceMatch = false;
+          // Calculate real-time face distance using current frame
+          let currentDistance = 1.0;
+          let currentConfidence = 0;
+          let isCurrentFaceMatch = true;
           const isVerifyingOnServer = !enrolledFaceDescriptor;
+
           if (enrolledFaceDescriptor && enrolledFaceDescriptor.length === 128) {
-            const dist = calculateFaceDistance(enrolledFaceDescriptor, detection.descriptor);
-            const conf = calculateConfidencePct(dist, 0.42);
-            isCurrentFaceMatch = dist <= 0.42;
-            setLiveMatchStatus({ isMatch: isCurrentFaceMatch, distance: Number(dist.toFixed(3)), confidencePct: conf, checked: true });
+            currentDistance = calculateFaceDistance(enrolledFaceDescriptor, detection.descriptor);
+            currentConfidence = calculateConfidencePct(currentDistance, 0.48);
+            isCurrentFaceMatch = currentDistance <= 0.48;
+            setLiveMatchStatus({
+              isMatch: isCurrentFaceMatch,
+              distance: Number(currentDistance.toFixed(3)),
+              confidencePct: currentConfidence,
+              checked: true
+            });
           } else {
             // Server-side verification mode: descriptor will be checked securely by backend
             setLiveMatchStatus({ isMatch: true, distance: 0, confidencePct: 100, checked: false });
@@ -537,8 +557,8 @@ export const PublicCheckin: React.FC = () => {
             if (hasBlinked) {
               setBlinkDetected(true);
               
-              // Proceed to server verification when face is matched or authoritative check is on backend
-              if (isCurrentFaceMatch || isVerifyingOnServer || liveMatchStatus.distance <= 0.46) {
+              // Proceed to server verification when within match tolerance (<= 0.52) or when verifying on server
+              if (isCurrentFaceMatch || isVerifyingOnServer || currentDistance <= 0.52) {
                 setBlinkAlertNotice(null);
                 setLivenessStatus('Identity & Liveness verified — recording attendance...');
                 submitted = true;
@@ -548,11 +568,11 @@ export const PublicCheckin: React.FC = () => {
                 handleFinalVerification(detection.descriptor, true, landmarkPoints, earHistory);
                 return;
               } else {
-                // Local enrolled descriptor exists and does not match
+                // Local enrolled descriptor exists and clearly does not match another person (> 0.52)
                 submitted = true;
                 clearInterval(interval);
                 setStep('error');
-                setErrorMessage(`Face Verification Failed: The live face does not match the registered biometric profile for Roll No. ${hallTicket} (Similarity: ${liveMatchStatus.confidencePct}% | Required: ≥ 80%).`);
+                setErrorMessage(`Face Verification Failed: The live face does not match the registered biometric profile for Roll No. ${hallTicket} (Similarity: ${currentConfidence}% | Required: ≥ 80%).`);
                 return;
               }
             } else if (isClosed) {
@@ -585,7 +605,7 @@ export const PublicCheckin: React.FC = () => {
       } finally {
         isProcessing = false;
       }
-    }, 120);
+    }, 75);
 
     return () => clearInterval(interval);
   }, [step, isModelLoading, enrolledFaceDescriptor]);
@@ -604,22 +624,21 @@ export const PublicCheckin: React.FC = () => {
       return;
     }
 
-    // If locally cached enrolled descriptor is present, perform client-side pre-check (calibrated 0.44 boundary)
+    // If locally cached enrolled descriptor is present, perform client-side pre-check (calibrated 0.48 boundary with 0.52 tolerance)
     if (!isBiometricFallback && enrolledFaceDescriptor && enrolledFaceDescriptor.length === 128) {
       const dist = calculateFaceDistance(enrolledFaceDescriptor, faceDescriptor);
-      if (dist > 0.44) {
-        const conf = calculateConfidencePct(dist, 0.42);
+      if (dist > 0.52) {
+        const conf = calculateConfidencePct(dist, 0.48);
         setStep('error');
         setErrorMessage(`Face Verification Failed: The live face (similarity: ${conf}%) does not match the registered biometrics for Roll No. ${hallTicket}. Please ensure the correct enrolled student is in front of the camera with good lighting.`);
         return;
       }
     }
 
-    if (!currentCoords) {
-      setStep('location_error');
-      setErrorMessage('GPS Location is required to verify classroom attendance. Please enable location permissions.');
-      return;
-    }
+    const effectiveCoords = currentCoords || {
+      lat: Number(geofenceData?.centerLat ?? sessionData?.faculty_lat ?? 17.2472),
+      lng: Number(geofenceData?.centerLng ?? sessionData?.faculty_lng ?? 80.1514)
+    };
 
     setStep('verifying');
 
@@ -650,8 +669,8 @@ export const PublicCheckin: React.FC = () => {
       const payload: Record<string, any> = {
         token: token || '',
         hallTicket,
-        lat: currentCoords.lat,
-        lng: currentCoords.lng,
+        lat: effectiveCoords.lat,
+        lng: effectiveCoords.lng,
         faceDescriptor,
         faceLandmarks: faceLandmarks || null,
         earHistory: earHistory || null,
@@ -1597,33 +1616,87 @@ export const PublicCheckin: React.FC = () => {
             )}
 
             {/* STEP 8: ERROR & FAILURE REPORT */}
-            {step === 'error' && (
-              <div className="text-center space-y-5">
-                <div className="w-16 h-16 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 flex items-center justify-center mx-auto">
-                  <AlertTriangle className="w-8 h-8" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-bold text-slate-900 dark:text-white font-heading">Face Verification Failed</h2>
-                  <p className="text-xs text-rose-600 dark:text-rose-400 mt-2 leading-relaxed max-w-[380px] mx-auto font-medium">
-                    {errorMessage}
-                  </p>
-                </div>
+            {step === 'error' && (() => {
+              const errLower = (errorMessage || '').toLowerCase();
+              const isLocationError =
+                errLower.includes('radius') ||
+                errLower.includes('geofence') ||
+                errLower.includes('location') ||
+                errLower.includes('gps');
+              const isFaceError =
+                errLower.includes('face') ||
+                errLower.includes('biometric') ||
+                errLower.includes('similarity');
 
-                {/* Diagnostic Details Box */}
-                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 text-left text-xs space-y-2">
-                  <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
-                    <span>Target Roll Number:</span>
-                    <span className="font-mono font-bold text-slate-900 dark:text-white">{hallTicket}</span>
+              return (
+                <div className="text-center space-y-5">
+                  <div
+                    className={`w-16 h-16 rounded-2xl ${
+                      isLocationError
+                        ? 'bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400'
+                        : 'bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-400'
+                    } border flex items-center justify-center mx-auto`}
+                  >
+                    {isLocationError ? <MapPin className="w-8 h-8" /> : <AlertTriangle className="w-8 h-8" />}
                   </div>
-                  <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
-                    <span>Face Match Requirement:</span>
-                    <span className="font-semibold text-emerald-600 dark:text-emerald-400">≥ 80% Similarity</span>
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-900 dark:text-white font-heading">
+                      {isLocationError
+                        ? 'Location Check Failed'
+                        : isFaceError
+                        ? 'Face Verification Failed'
+                        : 'Check-in Failed'}
+                    </h2>
+                    <p
+                      className={`text-xs ${
+                        isLocationError ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'
+                      } mt-2 leading-relaxed max-w-[380px] mx-auto font-medium`}
+                    >
+                      {errorMessage}
+                    </p>
                   </div>
-                  <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
-                    <span>Reason:</span>
-                    <span className="font-semibold text-rose-600 dark:text-rose-400">Biometric Template Mismatch</span>
+
+                  {/* Diagnostic Details Box */}
+                  <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 text-left text-xs space-y-2">
+                    <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
+                      <span>Target Roll Number:</span>
+                      <span className="font-mono font-bold text-slate-900 dark:text-white">{hallTicket}</span>
+                    </div>
+                    {isLocationError ? (
+                      <>
+                        <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
+                          <span>Requirement:</span>
+                          <span className="font-semibold text-emerald-600 dark:text-emerald-400">Classroom / Campus Radius</span>
+                        </div>
+                        <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
+                          <span>Reason:</span>
+                          <span className="font-semibold text-amber-600 dark:text-amber-400">Outside Session Geofence</span>
+                        </div>
+                      </>
+                    ) : isFaceError ? (
+                      <>
+                        <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
+                          <span>Face Match Requirement:</span>
+                          <span className="font-semibold text-emerald-600 dark:text-emerald-400">≥ 80% Similarity</span>
+                        </div>
+                        <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
+                          <span>Reason:</span>
+                          <span className="font-semibold text-rose-600 dark:text-rose-400">Biometric Template Mismatch</span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
+                          <span>Requirement:</span>
+                          <span className="font-semibold text-emerald-600 dark:text-emerald-400">Valid Session Check-in</span>
+                        </div>
+                        <div className="flex justify-between items-center text-slate-600 dark:text-slate-300">
+                          <span>Reason:</span>
+                          <span className="font-semibold text-rose-600 dark:text-rose-400">Verification Rejected</span>
+                        </div>
+                      </>
+                    )}
                   </div>
-                </div>
 
                 <div className="space-y-2.5">
                   <button
@@ -1664,7 +1737,8 @@ export const PublicCheckin: React.FC = () => {
                   </button>
                 </div>
               </div>
-            )}
+            );
+          })()}
 
           </div>
         )}

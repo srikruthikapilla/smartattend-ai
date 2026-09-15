@@ -99,7 +99,7 @@ class Student(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     hall_ticket_no = Column(String(50), unique=True, nullable=False)
     name = Column(String(255), nullable=False)
-    email = Column(String(255), unique=True, nullable=True)
+    email = Column(String(255), unique=True, nullable=False)
     phone = Column(String(50), nullable=True)
     role = Column(String(50), nullable=False, default="student")
     branch = Column(String(50), default="CSM")

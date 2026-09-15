@@ -68,7 +68,7 @@ export function calculateFaceDistance(
  * - Genuine match (distance <= 0.30): 80% to 100% confidence.
  * - Impostor/Mismatch (distance > 0.30): drops sharply from 65% down to 0%.
  */
-export function calculateConfidencePct(distance: number, threshold = 0.42): number {
+export function calculateConfidencePct(distance: number, threshold = 0.48): number {
   if (distance <= threshold) {
     const pct = 100 - (distance / threshold) * 20;
     return Math.max(80, Math.min(100, Math.round(pct)));

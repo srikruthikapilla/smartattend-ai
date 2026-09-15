@@ -84,6 +84,10 @@ def init_db() -> None:
     try:
         with engine.connect() as conn:
             conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS biometric_sign_count INTEGER DEFAULT 0 NOT NULL;"))
+            # Delete legacy fake/test student records with null or fake emails before enforcing NOT NULL
+            conn.execute(text("DELETE FROM students WHERE email IS NULL OR email LIKE 'test.security.%' OR name LIKE 'Student (%' OR name = 'No Email Student';"))
+            conn.execute(text("DELETE FROM admins WHERE email = 'rogue.admin@sbit.ac.in';"))
+            conn.execute(text("ALTER TABLE students ALTER COLUMN email SET NOT NULL;"))
             conn.execute(text("""
                 ALTER TABLE attendance_records DROP CONSTRAINT IF EXISTS attendance_records_verification_method_check;
                 ALTER TABLE attendance_records ADD CONSTRAINT attendance_records_verification_method_check 

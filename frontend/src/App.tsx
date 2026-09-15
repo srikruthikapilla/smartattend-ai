@@ -7,6 +7,8 @@ import { Sidebar } from './components/common/Sidebar';
 // Pages
 import { Login } from './pages/auth/Login';
 import { ResetPasswordPage } from './pages/auth/ResetPassword';
+import { AdminRegister } from './pages/auth/AdminRegister';
+import { StudentRegister } from './pages/auth/StudentRegister';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { StudentApprovals } from './pages/admin/StudentApprovals';
 import { ManualAttendanceAdmin } from './pages/admin/ManualAttendanceAdmin';
@@ -92,7 +94,10 @@ export const App: React.FC = () => {
       {/* ── Public Student Kiosk — Fully Standalone (NO sidebar, NO header) ── */}
       <Route path="/checkin" element={<PublicCheckin />} />
       <Route path="/student/checkin" element={<Navigate to="/checkin" replace />} />
-      <Route path="/register/student" element={<Navigate to="/checkin" replace />} />
+      <Route path="/register/student" element={<StudentRegister />} />
+      <Route path="/student/register" element={<StudentRegister />} />
+      <Route path="/register/admin" element={<AdminRegister />} />
+      <Route path="/admin/register" element={<AdminRegister />} />
 
       {/* ── Student Portal & Dashboard ── */}
       <Route path="/student" element={<StudentDashboard />} />

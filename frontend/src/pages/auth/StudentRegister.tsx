@@ -32,15 +32,21 @@ export const StudentRegister: React.FC = () => {
       return;
     }
 
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@') || !cleanEmail.includes('.')) {
+      setFormError('A valid student email address is mandatory.');
+      return;
+    }
+
     try {
       await registerStudent({
-        name,
+        name: name.trim(),
         hallTicketNo: cleanHT,
         branch,
         year,
         semester,
         section,
-        email: `${cleanHT.toLowerCase()}@sbit.ac.in`,
+        email: cleanEmail,
         phone,
         college: SBIT_COLLEGE_NAME
       });
@@ -190,6 +196,23 @@ export const StudentRegister: React.FC = () => {
                 <option value="C">Section C</option>
                 <option value="D">Section D</option>
               </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+              Email Address <span className="text-red-500">*</span>
+            </label>
+            <div className="relative">
+              <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="student@example.com"
+                required
+                className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs focus:border-slate-900 dark:focus:border-white focus:outline-none"
+              />
             </div>
           </div>
 

@@ -5,7 +5,7 @@ from typing import List, Tuple
 def compare_face_embeddings(
     enrolled_vec: List[float],
     live_vec: List[float],
-    threshold: float = 0.42
+    threshold: float = 0.48
 ) -> Tuple[bool, float, int]:
     """
     Computes Euclidean (L2) distance between two L2-normalized 128-dim face-api.js descriptors.
