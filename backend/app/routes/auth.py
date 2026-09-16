@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 # Rate Limiter (optional — degrades gracefully if slowapi is not installed)
 # ---------------------------------------------------------------------------
 try:
-    from slowapi import Limiter
-    from slowapi.util import get_remote_address
+    from slowapi import Limiter  # type: ignore
+    from slowapi.util import get_remote_address  # type: ignore
     _limiter = Limiter(key_func=get_remote_address)
     _RATE_LIMIT_AVAILABLE = True
 except ImportError:
@@ -149,12 +149,12 @@ class VerifyEnrollmentOTPRequest(BaseModel):
 
 @router.get("/users")
 def get_all_users(
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    current_user: Dict[str, Any] = Depends(require_role(["admin", "faculty"])),
     db: Session = Depends(get_db)
 ):
     """
     Fetch all users across Admins, Faculty, and Students for frontend synchronization.
-    Requires an authenticated user session.
+    Strictly restricted to Admin and Faculty roles (students are forbidden).
     """
     admins = db.query(Admin).all()
     faculty = db.query(Faculty).all()

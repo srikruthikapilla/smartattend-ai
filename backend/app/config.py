@@ -18,6 +18,10 @@ CORS_ORIGIN = os.getenv("CORS_ORIGIN", "http://localhost:3000")
 CORS_ORIGINS_RAW = os.getenv("CORS_ORIGINS", CORS_ORIGIN)
 CORS_ORIGINS = [orig.strip() for orig in CORS_ORIGINS_RAW.split(",") if orig.strip()]
 
+if IS_PRODUCTION:
+    if not CORS_ORIGINS or any(orig == "*" for orig in CORS_ORIGINS):
+        raise RuntimeError("CRITICAL SECURITY ERROR: Wildcard '*' CORS origin is not permitted in production. Provide explicit production origin.")
+
 # Helper to check if running in a container
 def _is_running_in_container() -> bool:
     return (
@@ -28,23 +32,46 @@ def _is_running_in_container() -> bool:
     )
 
 # Database configuration
+_INSECURE_DB_PASSWORDS = {"postgres", "postgrespassword", "password", "admin", "ak", "root", "localdevpassword123"}
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     db_user = os.getenv("POSTGRES_USER", "postgres")
-    db_pass = os.getenv("POSTGRES_PASSWORD", "postgrespassword")
+    if IS_PRODUCTION:
+        db_pass = os.getenv("POSTGRES_PASSWORD")
+        if not db_pass:
+            raise RuntimeError("CRITICAL SECURITY ERROR: POSTGRES_PASSWORD environment variable is required in production.")
+        if len(db_pass) < 16:
+            raise RuntimeError("CRITICAL SECURITY ERROR: POSTGRES_PASSWORD must be at least 16 characters long in production.")
+        if db_pass.strip().lower() in _INSECURE_DB_PASSWORDS:
+            raise RuntimeError("CRITICAL SECURITY ERROR: Insecure or default POSTGRES_PASSWORD cannot be used in production.")
+    else:
+        db_pass = os.getenv("POSTGRES_PASSWORD", "postgrespassword")
+
     db_host = os.getenv("POSTGRES_HOST", "postgres" if _is_running_in_container() else "localhost")
     db_port = os.getenv("POSTGRES_PORT", "5432")
     db_name = os.getenv("POSTGRES_DB", "smartattend")
     DATABASE_URL = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
+else:
+    # If DATABASE_URL was provided directly in production, validate password within URL
+    if IS_PRODUCTION:
+        for bad_pass in _INSECURE_DB_PASSWORDS:
+            if f":{bad_pass}@" in DATABASE_URL.lower():
+                raise RuntimeError(f"CRITICAL SECURITY ERROR: Insecure default password '{bad_pass}' detected in DATABASE_URL in production.")
 
 # If running locally outside docker, translate docker hostnames to localhost
 if not _is_running_in_container():
     if "@postgres:" in DATABASE_URL:
         DATABASE_URL = DATABASE_URL.replace("@postgres:", "@localhost:")
 
-# Reject default DB password in production
-if IS_PRODUCTION and ("postgrespassword" in DATABASE_URL or "localdevpassword123" in DATABASE_URL):
-    raise RuntimeError("CRITICAL SECURITY ERROR: POSTGRES_PASSWORD must not be the default in production.")
+# In production, also validate POSTGRES_PASSWORD if specified independently
+if IS_PRODUCTION:
+    raw_pass = os.getenv("POSTGRES_PASSWORD")
+    if raw_pass:
+        if len(raw_pass) < 16:
+            raise RuntimeError("CRITICAL SECURITY ERROR: POSTGRES_PASSWORD must be at least 16 characters long in production.")
+        if raw_pass.strip().lower() in _INSECURE_DB_PASSWORDS:
+            raise RuntimeError("CRITICAL SECURITY ERROR: Insecure or default POSTGRES_PASSWORD cannot be used in production.")
 
 # Redis configuration for OTP with TTL
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")

@@ -1,14 +1,11 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: smartattend-postgres
     restart: always
-    env_file:
-      - ./backend/.env
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-smartattend}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Ak}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/db/postgresql_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
@@ -21,7 +18,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: smartattend-redis
     restart: always
     command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
     healthcheck:
@@ -35,18 +31,35 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: smartattend-backend
     restart: always
-    env_file:
-      - ./backend/.env
     environment:
       PORT: 5000
-      REDIS_URL: redis://redis:6379/0
+      NODE_ENV: ${NODE_ENV:-production}
+
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-smartattend}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Ak}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+
+      REDIS_URL: redis://redis:6379/0
+
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      EDGE_API_KEY: ${EDGE_API_KEY:?EDGE_API_KEY is required}
+
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?ADMIN_EMAIL is required}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
+
+      CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN is required}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+
+      BREVO_SMTP_SERVER: ${BREVO_SMTP_SERVER:-smtp-relay.brevo.com}
+      BREVO_SMTP_PORT: ${BREVO_SMTP_PORT:-587}
+      BREVO_SMTP_LOGIN: ${BREVO_SMTP_LOGIN:-}
+      BREVO_SMTP_KEY: ${BREVO_SMTP_KEY:-}
+      BREVO_FROM_EMAIL: ${BREVO_FROM_EMAIL:-}
+      BREVO_FROM_NAME: ${BREVO_FROM_NAME:-Smart Attend}
+
       DOCKER_CONTAINER: "true"
     # Backend is NOT exposed to host — access is via Nginx reverse proxy only
     expose:
@@ -67,11 +80,11 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: smartattend-frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
     restart: always
-    ports:
-      - "3000:80"
-      - "3443:443"
+    expose:
+      - "80"
     depends_on:
       backend:
         condition: service_healthy

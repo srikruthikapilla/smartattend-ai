@@ -5,6 +5,8 @@
 .env.*
 !.env.example
 !.env.test.example
+backend/.env
+frontend/.env
 *.env
 *.env.local
 *.env.development.local
