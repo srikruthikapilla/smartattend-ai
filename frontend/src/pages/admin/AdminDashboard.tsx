@@ -11,10 +11,11 @@ import { LeafletMap } from '../../components/gps/LeafletMap';
 import { StudentAttendanceLookupModal } from '../../components/attendance/StudentAttendanceLookupModal';
 import { AdminModal } from '../../components/admin/AdminModal';
 import { UserProfile } from '../../types/auth';
+import { AttendanceRecord } from '../../types/attendance';
 import {
   Users, UserCheck, Search, MapPin, PlusCircle, ShieldCheck,
   Download, TrendingUp, TrendingDown, Radio,
-  MoreVertical, UserPlus, MessageSquare,
+  MoreVertical, UserPlus,
   GraduationCap, BarChart3, Pencil, Trash2, Plus, Mail, Phone, FileSpreadsheet, Shield
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -47,6 +48,50 @@ export const AdminDashboard: React.FC = () => {
   const absentCount = activeRecords.filter(r => r.status === 'absent').length;
   const totalScanned = presentCount + lateCount + absentCount;
   const attendancePct = totalScanned > 0 ? Math.round(((presentCount + lateCount) / totalScanned) * 100) : 0;
+
+  // Real-time: students added this week (from users createdAt)
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const studentsThisWeek = users.filter(u =>
+    u.role === 'student' &&
+    u.status === 'approved' &&
+    u.createdAt &&
+    new Date(u.createdAt) >= weekAgo
+  ).length;
+
+  // Real-time: today vs yesterday attendance rate delta
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+
+  const getAttendanceRate = (records: AttendanceRecord[]) => {
+    if (records.length === 0) return null;
+    const present = records.filter(r => r.status === 'present' || r.status === 'late').length;
+    return Math.round((present / records.length) * 100);
+  };
+
+  const todayRecords = attendanceRecords.filter(r => new Date(r.markedAt) >= todayStart);
+  const yesterdayRecords = attendanceRecords.filter(r => {
+    const d = new Date(r.markedAt);
+    return d >= yesterdayStart && d < todayStart;
+  });
+  const todayRate = getAttendanceRate(todayRecords);
+  const yesterdayRate = getAttendanceRate(yesterdayRecords);
+  const attendanceDelta = (todayRate !== null && yesterdayRate !== null) ? todayRate - yesterdayRate : null;
+
+  // Real-time: GPS integrity and out-of-bounds from live records
+  const geofenceRadius = geofence.radiusMeters || 150;
+  const recordsWithGPS = attendanceRecords.filter(r =>
+    r.studentLat !== undefined &&
+    r.studentLng !== undefined &&
+    r.gpsDistanceMeters !== undefined
+  );
+  const outOfBoundsToday = recordsWithGPS.filter(r =>
+    new Date(r.markedAt) >= todayStart &&
+    (r.gpsDistanceMeters || 0) > geofenceRadius
+  ).length;
+  const gpsIntegrity = recordsWithGPS.length > 0
+    ? Math.round(((recordsWithGPS.length - outOfBoundsToday) / recordsWithGPS.length) * 100)
+    : 0;
 
   // Real Attendance Distribution per day of week (Mon..Sun)
   const chartLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -158,9 +203,9 @@ export const AdminDashboard: React.FC = () => {
             <GraduationCap className="w-5 h-5 text-slate-400 opacity-60" />
           </div>
           <div>
-            <div className="text-3xl font-semibold text-slate-900 dark:text-white tracking-tight">{totalStudents > 0 ? totalStudents.toLocaleString() : '3,428'}</div>
-            <div className="text-[11px] font-semibold text-teal-600 dark:text-teal-400 mt-1 flex items-center gap-1 uppercase tracking-wider">
-              <TrendingUp className="w-3 h-3" /> +12 this week
+            <div className="text-3xl font-semibold text-slate-900 dark:text-white tracking-tight">{totalStudents > 0 ? totalStudents.toLocaleString() : '—'}</div>
+            <div className={`text-[11px] font-semibold mt-1 flex items-center gap-1 uppercase tracking-wider ${studentsThisWeek > 0 ? 'text-teal-600 dark:text-teal-400' : 'text-slate-400'}`}>
+              <TrendingUp className="w-3 h-3" /> {studentsThisWeek > 0 ? `+${studentsThisWeek} this week` : 'No new this week'}
             </div>
           </div>
         </div>
@@ -172,10 +217,15 @@ export const AdminDashboard: React.FC = () => {
             <BarChart3 className="w-5 h-5 text-slate-400 opacity-60" />
           </div>
           <div>
-            <div className="text-3xl font-semibold text-slate-900 dark:text-white tracking-tight">{attendancePct}.4%</div>
-            <div className="text-[11px] font-semibold text-red-500 mt-1 flex items-center gap-1 uppercase tracking-wider">
-              <TrendingDown className="w-3 h-3" /> -2.1% from yesterday
-            </div>
+            <div className="text-3xl font-semibold text-slate-900 dark:text-white tracking-tight">{attendancePct}%</div>
+            {attendanceDelta !== null ? (
+              <div className={`text-[11px] font-semibold mt-1 flex items-center gap-1 uppercase tracking-wider ${attendanceDelta >= 0 ? 'text-teal-600 dark:text-teal-400' : 'text-red-500'}`}>
+                {attendanceDelta >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                {attendanceDelta > 0 ? `+${attendanceDelta}%` : `${attendanceDelta}%`} from yesterday
+              </div>
+            ) : (
+              <div className="text-[11px] font-semibold text-slate-400 mt-1 uppercase tracking-wider">No data yet</div>
+            )}
           </div>
         </div>
 
@@ -200,18 +250,15 @@ export const AdminDashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Stat 4: SMS Balance */}
+        {/* Stat 4: Pending Approvals */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 flex flex-col justify-between hover:shadow-md transition-shadow">
           <div className="flex justify-between items-start mb-4">
-            <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">SMS Balance</span>
-            <MessageSquare className="w-5 h-5 text-slate-400 opacity-60" />
+            <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pending Approvals</span>
+            <UserPlus className="w-5 h-5 text-slate-400 opacity-60" />
           </div>
           <div>
-            <div className="text-3xl font-semibold text-slate-900 dark:text-white tracking-tight">12,450</div>
-            <div className="text-[11px] font-semibold text-slate-400 mt-1 uppercase tracking-wider">Credits Remaining</div>
-          </div>
-          <div className="w-full bg-slate-200 dark:bg-slate-800 h-1 mt-3 rounded-full overflow-hidden">
-            <div className="bg-slate-900 dark:bg-white h-full w-[45%] rounded-full"></div>
+            <div className="text-3xl font-semibold text-slate-900 dark:text-white tracking-tight">{pendingStudents.length}</div>
+            <div className="text-[11px] font-semibold text-amber-600 dark:text-amber-400 mt-1 uppercase tracking-wider">Awaiting verification</div>
           </div>
         </div>
       </div>
@@ -326,11 +373,15 @@ export const AdminDashboard: React.FC = () => {
             </div>
             <div className="flex justify-between items-center text-sm border-b border-slate-100 dark:border-slate-800 pb-2">
               <span className="text-slate-500 dark:text-slate-400">GPS Integrity</span>
-              <span className="text-teal-600 dark:text-teal-400 font-medium">98.5% High</span>
+              <span className={`${gpsIntegrity >= 90 ? 'text-teal-600 dark:text-teal-400' : gpsIntegrity >= 70 ? 'text-amber-600 dark:text-amber-400' : 'text-red-500'} font-medium`}>
+                {gpsIntegrity}% {gpsIntegrity >= 90 ? 'High' : gpsIntegrity >= 70 ? 'Medium' : 'Low'}
+              </span>
             </div>
             <div className="flex justify-between items-center text-sm">
               <span className="text-slate-500 dark:text-slate-400">Out of Bounds Today</span>
-              <span className="text-red-500 font-medium">14 Students</span>
+              <span className={`${outOfBoundsToday > 0 ? 'text-red-500' : 'text-teal-600 dark:text-teal-400'} font-medium`}>
+                {outOfBoundsToday} {outOfBoundsToday === 1 ? 'Student' : 'Students'}
+              </span>
             </div>
           </div>
           <div className="p-3 bg-slate-50 dark:bg-slate-800/50 text-center border-t border-slate-200 dark:border-slate-800">
