@@ -12,6 +12,9 @@
 *.pem
 *.key
 *.secret
+.agents
+.agent
+.ag
 
 # ==============================================================================
 # Dependencies & Build Outputs

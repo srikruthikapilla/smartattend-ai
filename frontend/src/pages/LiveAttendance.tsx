@@ -183,65 +183,65 @@ export const LiveAttendance: React.FC = () => {
     <div className="max-w-[1440px] mx-auto w-full space-y-6">
 
       {/* Top Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs">
+      <div className="card-elevation p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <span className={`w-2.5 h-2.5 rounded-full ${isConnected ? 'bg-emerald-500 animate-ping' : 'bg-amber-500'}`}></span>
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-accent animate-ping' : 'bg-amber-500'}`}></span>
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 font-heading">
               {isConnected ? 'Live WebSocket Stream Connected' : 'Connecting to Attendance Stream...'}
             </span>
           </div>
-          <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+          <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight font-heading">
             Live Attendance Dashboard
           </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-sans">
             Real-time feed of campus check-ins with Face AI matching, eye blink liveness, and geofence tracking.
           </p>
         </div>
 
         {/* Stats Pills & Refresh */}
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold">
-            <Users className="w-4 h-4 text-teal-500" />
-            <span>Total Marked: <span className="text-teal-600 dark:text-teal-400">{records.length}</span></span>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-surface-dim border border-slate-200 dark:border-slate-800 text-xs font-bold">
+            <Users className="w-3.5 h-3.5 text-accent" />
+            <span>Total Marked: <span className="text-accent">{records.length}</span></span>
           </div>
           {lateCount > 0 && (
-            <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs font-bold text-amber-700 dark:text-amber-300">
-              <Clock className="w-4 h-4 text-amber-500" />
+            <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-600 dark:text-amber-400">
+              <Clock className="w-3.5 h-3.5 text-amber-500" />
               <span>Late: {lateCount}</span>
             </div>
           )}
-          <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold">
-            <Eye className="w-4 h-4 text-emerald-500" />
-            <span>Blink Verified: <span className="text-emerald-600 dark:text-emerald-400">{blinkCount}</span></span>
+          <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-surface-dim border border-slate-200 dark:border-slate-800 text-xs font-bold">
+            <Eye className="w-3.5 h-3.5 text-accent" />
+            <span>Blink Verified: <span className="text-accent">{blinkCount}</span></span>
           </div>
           <button
             onClick={fetchRecords}
             disabled={isRefreshing}
-            className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition"
+            className="p-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-surface-card-dark text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-surface-dim transition"
             title="Refresh Records"
           >
-            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-indigo-500' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-accent' : ''}`} />
           </button>
         </div>
       </div>
 
       {/* Live Records Table */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xs overflow-hidden">
-        <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="card-elevation overflow-hidden">
+        <div className="p-5 border-b border-slate-100 dark:border-white/[0.06] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <Radio className="w-5 h-5 text-emerald-500 animate-pulse" />
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">Incoming Attendance Stream</h3>
+            <Radio className="w-4 h-4 text-accent animate-pulse" />
+            <h3 className="text-base font-bold text-slate-900 dark:text-white font-heading">Incoming Attendance Stream</h3>
           </div>
 
           <div className="relative w-full sm:w-64">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by name or roll no..."
-              className="pl-9 pr-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500 w-full font-medium"
+              placeholder="Filter by name, hall ticket..."
+              className="input-premium pl-10 pr-3 py-1.5 text-xs"
             />
           </div>
         </div>

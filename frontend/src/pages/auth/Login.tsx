@@ -74,20 +74,17 @@ export const Login: React.FC = () => {
     <div className="min-h-screen w-full bg-white dark:bg-surface-dark text-slate-900 dark:text-white flex">
       {/* Left: Brand Visual with Moving Portal Field Background & Animated Typography */}
       <div className="hidden lg:flex flex-col justify-between w-[45%] bg-[#020202] text-white p-12 relative overflow-hidden border-r border-slate-200/10">
-        {/* Moving Dynamic Three.js Shader Portal Background */}
-        <div className="absolute inset-0 z-0 pointer-events-none opacity-75">
+        {/* Moving Dynamic Shader Portal Background */}
+        <div className="absolute inset-0 z-0 pointer-events-none opacity-100">
           <PortalFieldCollection
-            mode="dark"
-            speed={0.8}
-            size={1.2}
-            length={1}
-            opacity={0.85}
+            speed={1.0}
+            opacity={1.0}
           />
         </div>
 
-        {/* Soft vignette & ambient radial depth overlays for crystal-clear readability */}
-        <div className="absolute inset-0 z-0 pointer-events-none bg-[radial-gradient(ellipse_at_70%_20%,rgba(13,148,136,0.2),transparent_65%),radial-gradient(ellipse_at_20%_80%,rgba(13,148,136,0.12),transparent_60%)]" />
-        <div className="absolute inset-0 z-0 pointer-events-none bg-gradient-to-b from-[#020202]/50 via-transparent to-[#020202]/85" />
+        {/* Ambient radial depth overlays for crystal-clear readability */}
+        <div className="absolute inset-0 z-0 pointer-events-none bg-[radial-gradient(ellipse_at_70%_20%,rgba(13,148,136,0.25),transparent_65%),radial-gradient(ellipse_at_20%_80%,rgba(13,148,136,0.15),transparent_60%)]" />
+        <div className="absolute inset-0 z-0 pointer-events-none bg-gradient-to-b from-black/20 via-transparent to-black/60" />
 
         {/* Minimal precision dot-matrix grid with radial vignette */}
         <div
@@ -112,9 +109,11 @@ export const Login: React.FC = () => {
 
         {/* Logo */}
         <div className="relative z-10 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-accent/20 flex items-center justify-center border border-accent/30 backdrop-blur-sm">
-            <Check className="w-4 h-4 text-accent-light" />
-          </div>
+          <img
+            src="/assets/logos/logo.png"
+            alt="Smart Attend Logo"
+            className="w-10 h-10 object-contain drop-shadow-sm"
+          />
           <div>
             <p className="font-bold text-sm tracking-tight font-heading">Smart Attend</p>
             <p className="text-[10px] text-slate-400 font-mono uppercase tracking-wider">SBIT Khammam</p>
@@ -162,21 +161,23 @@ export const Login: React.FC = () => {
       <div className="flex-1 flex items-center justify-center p-6 sm:p-12">
         <div className="w-full max-w-sm space-y-8 animate-fade-up">
           <div>
-            <div className="lg:hidden flex items-center gap-2.5 mb-8">
-              <div className="w-8 h-8 rounded-lg bg-accent/20 flex items-center justify-center border border-accent/30">
-                <Check className="w-4 h-4 text-accent" />
-              </div>
+            <div className="lg:hidden flex items-center gap-3 mb-8">
+              <img
+                src="/assets/logos/logo.png"
+                alt="Smart Attend Logo"
+                className="w-9 h-9 object-contain"
+              />
               <span className="font-bold text-sm font-heading tracking-tight">Smart Attend</span>
             </div>
 
-            <h2 className="text-2xl sm:text-3xl font-bold tracking-tighter font-heading">Welcome back</h2>
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tighter font-heading text-slate-900 dark:text-white">Welcome back</h2>
             <p className="text-sm text-slate-500 dark:text-slate-400 mt-2">
               Sign in to your institutional account
             </p>
           </div>
 
           {error && (
-            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/40 text-red-600 dark:text-red-400 text-xs flex items-start gap-2">
+            <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/40 text-red-600 dark:text-red-400 text-xs flex items-start gap-2.5">
               <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>
@@ -184,11 +185,11 @@ export const Login: React.FC = () => {
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label htmlFor="email" className="block text-xs font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-2">
+              <label htmlFor="email" className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-2">
                 Email address
               </label>
               <div className="relative">
-                <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                 <input
                   id="email"
                   type="email"
@@ -202,11 +203,11 @@ export const Login: React.FC = () => {
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-xs font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-2">
+              <label htmlFor="password" className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-2">
                 Password
               </label>
               <div className="relative">
-                <LockKeyhole className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <LockKeyhole className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                 <input
                   id="password"
                   type={showPassword ? 'text' : 'password'}
@@ -214,12 +215,12 @@ export const Login: React.FC = () => {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter your password"
                   required
-                  className="input-premium pl-10 pr-12"
+                  className="input-premium pl-10 pr-11"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors duration-300"
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors duration-200"
                   title={showPassword ? 'Hide password' : 'Show password'}
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -227,20 +228,20 @@ export const Login: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center justify-between">
-              <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 cursor-pointer select-none">
+            <div className="flex items-center justify-between text-xs sm:text-sm">
+              <label className="flex items-center gap-2 text-slate-600 dark:text-slate-400 cursor-pointer select-none">
                 <input
                   type="checkbox"
                   checked={rememberMe}
                   onChange={(e) => setRememberMe(e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-300 dark:border-slate-700 text-accent-DEFAULT focus:ring-accent-DEFAULT"
+                  className="w-4 h-4 rounded text-accent focus:ring-accent"
                 />
-                Remember me
+                <span>Remember me</span>
               </label>
               <button
                 type="button"
                 onClick={() => setIsForgotModalOpen(true)}
-                className="text-sm font-medium text-accent-DEFAULT dark:text-accent-light hover:underline transition"
+                className="font-medium text-accent hover:underline transition"
               >
                 Forgot password?
               </button>
@@ -249,32 +250,21 @@ export const Login: React.FC = () => {
             <button
               type="submit"
               disabled={isLoading}
-              className="btn-secondary w-full justify-center py-3"
+              className="btn-primary w-full justify-center py-3 text-sm font-semibold rounded-xl shadow-sm hover:shadow-md transition-all"
             >
               {isLoading ? (
                 <>
                   <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Signing in...
+                  <span>Signing in...</span>
                 </>
               ) : (
                 <>
-                  Sign in
-                  <div className="w-6 h-6 rounded-full bg-white/10 dark:bg-black/10 flex items-center justify-center ml-1">
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </div>
+                  <span>Sign in</span>
+                  <ArrowRight className="w-4 h-4" />
                 </>
               )}
             </button>
           </form>
-
-          <div className="pt-6 border-t border-slate-100 dark:border-white/[0.06]">
-            <p className="text-center text-xs text-slate-400 dark:text-slate-500">
-              Don't have an account?{' '}
-              <a href="/register/student" className="text-accent-DEFAULT dark:text-accent-light font-medium hover:underline">
-                Register as a student
-              </a>
-            </p>
-          </div>
         </div>
       </div>
 

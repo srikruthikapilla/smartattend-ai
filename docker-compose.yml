@@ -83,8 +83,9 @@ services:
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
     restart: always
-    expose:
-      - "80"
+    ports:
+      - "${PORT_HTTP:-80}:80"
+      - "${PORT_HTTPS:-443}:443"
     depends_on:
       backend:
         condition: service_healthy

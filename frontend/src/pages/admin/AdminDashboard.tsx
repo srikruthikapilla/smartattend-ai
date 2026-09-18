@@ -143,53 +143,56 @@ export const AdminDashboard: React.FC = () => {
             System overview and real-time analytics for SBIT Khammam.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2 justify-start sm:justify-end">
           <button
-            onClick={() => setIsAdminModalOpen(true)}
-            className="btn-secondary"
-            title="Manage administrators, add new admins, or delete accounts"
+            onClick={() => setIsInsertModalOpen(true)}
+            className="btn-primary"
+            title="Import students via Excel (.xlsx) / CSV or manual entry"
           >
-            <Shield className="w-4 h-4" />
-            <span>Manage admins</span>
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            <span>Import students</span>
+          </button>
+          <Link
+            to="/attendance/live"
+            className="btn-outline text-accent hover:border-accent"
+            title="Watch real-time multi-modal attendance stream"
+          >
+            <Radio className="w-3.5 h-3.5 animate-pulse text-accent" />
+            <span>Live stream</span>
+          </Link>
+          <button
+            onClick={() => setIsGPSModalOpen(true)}
+            className="btn-outline"
+            title="Configure campus perimeter and GPS anchor"
+          >
+            <MapPin className="w-3.5 h-3.5 text-accent" />
+            <span>GPS geofence</span>
           </button>
           <button
             onClick={() => {
               setSelectedStudentLookup('');
               setIsStudentLookupOpen(true);
             }}
-            className="btn-secondary"
+            className="btn-outline"
             title="Lookup student attendance records and eligibility"
           >
-            <UserCheck className="w-4 h-4" />
+            <UserCheck className="w-3.5 h-3.5" />
             <span>Student lookup</span>
           </button>
           <button
-            onClick={() => setIsInsertModalOpen(true)}
-            className="btn-primary"
-            title="Import students via Excel (.xlsx) / CSV or manual entry"
-          >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span>Import students</span>
-          </button>
-          <button
-            onClick={() => setIsGPSModalOpen(true)}
+            onClick={() => setIsAdminModalOpen(true)}
             className="btn-outline"
+            title="Manage administrators, add new admins, or delete accounts"
           >
-            <MapPin className="w-4 h-4 text-accent-DEFAULT" />
-            <span>GPS geofence</span>
+            <Shield className="w-3.5 h-3.5" />
+            <span>Manage admins</span>
           </button>
-          <Link
-            to="/attendance/live"
-            className="btn-primary"
-          >
-            <Radio className="w-4 h-4 animate-pulse" />
-            <span>Live stream</span>
-          </Link>
           <button
             onClick={() => exportAttendanceToExcel(attendanceRecords, 'SBIT_Admin_Attendance')}
             className="btn-outline"
+            title="Export attendance ledger to Excel"
           >
-            <Download className="w-4 h-4" />
+            <Download className="w-3.5 h-3.5" />
             <span>Export</span>
           </button>
         </div>
@@ -288,21 +291,17 @@ export const AdminDashboard: React.FC = () => {
                     <div
                       className={`w-full max-w-[40px] rounded-t transition-colors cursor-pointer ${
                         idx === 4
-                          ? 'bg-slate-900 dark:bg-white shadow-md'
-                          : val < 40
-                          ? 'bg-red-200 dark:bg-red-900/40 hover:bg-red-500 dark:hover:bg-red-500'
-                          : 'bg-slate-200 dark:bg-slate-700 hover:bg-slate-900 dark:hover:bg-white'
+                          ? 'bg-accent shadow-sm'
+                          : 'bg-slate-200 dark:bg-slate-800 hover:bg-accent/60'
                       }`}
-                      style={{ height: `${val * 2.5}px` }}
+                      style={{ height: `${Math.max(val * 2.2, 4)}px` }}
                     >
-                      <div className={`hidden group-hover:block absolute -top-8 left-1/2 -translate-x-1/2 ${
-                        val < 40 ? 'bg-red-500 text-white' : 'bg-slate-900 dark:bg-white text-white dark:text-slate-900'
-                      } text-[10px] font-bold px-2 py-1 rounded whitespace-nowrap`}>
+                      <div className="hidden group-hover:block absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[10px] font-bold px-2 py-1 rounded-md whitespace-nowrap shadow-md z-20">
                         {val}%
                       </div>
                     </div>
                   </div>
-                  <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">{chartLabels[idx]}</span>
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wider font-semibold">{chartLabels[idx]}</span>
                 </div>
               ))}
             </div>

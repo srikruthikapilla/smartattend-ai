@@ -93,12 +93,19 @@
     outline-offset: 2px;
     border-radius: 0.375rem;
   }
+
+  /* Native form control accent color */
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
 }
 
 /* ──── Design System: Premium Card Elevation ──── */
 @layer components {
   .card-elevation {
-    @apply bg-white dark:bg-surface-card-dark rounded-lg transition-all duration-300;
+    @apply bg-white dark:bg-surface-card-dark rounded-xl transition-all duration-300;
     border: 1px solid var(--border-default);
     box-shadow: 0 1px 3px var(--shadow-color), 0 1px 2px var(--shadow-color);
   }
@@ -168,7 +175,7 @@
 
   /* ── Premium Button Base ── */
   .btn-premium {
-    @apply inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold font-heading transition-all duration-300 ease-premium;
+    @apply inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold font-heading transition-all duration-300 ease-premium;
     transform: translateZ(0);
   }
   .btn-premium:hover {
@@ -183,7 +190,7 @@
     box-shadow: 0 2px 8px rgba(13, 148, 136, 0.2);
   }
   .btn-primary:hover {
-    @apply bg-accent-light;
+    @apply bg-accent-light text-white;
     box-shadow: 0 4px 16px rgba(13, 148, 136, 0.3);
   }
 
@@ -197,23 +204,23 @@
   }
 
   .btn-outline {
-    @apply btn-premium bg-white dark:bg-surface-elevated-dark text-slate-800 dark:text-slate-200;
+    @apply btn-premium bg-white dark:bg-surface-elevated-dark text-slate-700 dark:text-slate-200;
     border: 1px solid var(--border-default);
   }
   .btn-outline:hover {
     border-color: rgba(13, 148, 136, 0.3);
-    @apply bg-slate-50 dark:bg-surface-dim;
+    @apply bg-slate-50 dark:bg-surface-dim text-slate-900 dark:text-white;
   }
 
   /* ── Input Focus Ring ── */
   .input-premium {
-    @apply w-full px-4 py-3 bg-surface dark:bg-surface-dark rounded-lg text-sm transition-all duration-300;
+    @apply w-full px-4 py-2.5 bg-white dark:bg-surface-card-dark rounded-xl text-sm transition-all duration-200 text-slate-900 dark:text-white;
     border: 1px solid var(--border-default);
   }
   .input-premium:focus {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-muted), 0 0 12px rgba(13, 148, 136, 0.08);
+    box-shadow: 0 0 0 3px var(--accent-muted);
   }
   .input-premium::placeholder {
     @apply text-slate-400 dark:text-slate-500;

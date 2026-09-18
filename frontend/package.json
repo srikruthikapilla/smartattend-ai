@@ -14,6 +14,7 @@
     "@tanstack/react-query": "^5.28.9",
     "@tensorflow/tfjs": "^4.22.0",
     "@types/leaflet": "^1.9.22",
+    "@types/three": "^0.186.0",
     "canvas-confetti": "^1.9.2",
     "clsx": "^2.1.0",
     "face-api.js": "^0.22.2",
@@ -32,6 +33,7 @@
     "recharts": "^2.12.3",
     "socket.io-client": "^4.8.3",
     "tailwind-merge": "^2.2.2",
+    "three": "^0.186.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

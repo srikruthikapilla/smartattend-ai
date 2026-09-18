@@ -29,11 +29,11 @@ export const ManualAttendanceAdmin: React.FC = () => {
     <div className="max-w-[1440px] mx-auto w-full space-y-6">
       
       {/* Banner */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm">
-        <span className="px-2.5 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider bg-purple-500/10 border border-purple-500/20 text-purple-600 dark:text-purple-400">
+      <div className="card-elevation p-6">
+        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-accent-muted border border-accent/20 text-accent font-heading">
           Administrator Override
         </span>
-        <h2 className="text-2xl md:text-3xl font-semibold text-slate-900 dark:text-white mt-1 tracking-tight">Manual Attendance Override Center</h2>
+        <h2 className="text-2xl md:text-3xl font-bold text-slate-900 dark:text-white mt-1.5 tracking-tight font-heading">Manual Attendance Override Center</h2>
         <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
           Provides manual override fallback for browser, camera, GPS, or connectivity exceptions. All actions generate immutable audit logs.
         </p>
@@ -42,27 +42,27 @@ export const ManualAttendanceAdmin: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         {/* Override Form (5 cols) */}
-        <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm space-y-4">
-          <h3 className="text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
-            <Edit3 className="w-4 h-4 text-purple-500" />
+        <div className="lg:col-span-5 card-elevation p-6 space-y-4">
+          <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2 border-b border-slate-100 dark:border-white/[0.06] pb-3 font-heading">
+            <Edit3 className="w-4 h-4 text-accent" />
             Record Manual Entry
           </h3>
 
           {successMsg && (
-            <div className="p-3.5 rounded-lg bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-200 text-xs font-semibold flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-teal-600 dark:text-teal-400 flex-shrink-0" />
+            <div className="p-3.5 rounded-xl bg-accent-muted border border-accent/30 text-accent text-xs font-semibold flex items-center gap-2 shadow-xs">
+              <CheckCircle2 className="w-4 h-4 text-accent flex-shrink-0" />
               <span>{successMsg}</span>
             </div>
           )}
 
           <form onSubmit={handleManualSubmit} className="space-y-4 text-xs">
             <div>
-              <label className="block font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-1.5">Select Approved Student</label>
+              <label className="block font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">Select Approved Student</label>
               <select
                 value={selectedStudentId}
                 onChange={(e) => setSelectedStudentId(e.target.value)}
                 required
-                className="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs focus:border-slate-900 dark:focus:border-white focus:outline-none"
+                className="input-premium text-xs"
               >
                 <option value="">-- Choose Student --</option>
                 {approvedStudents.map(s => (
@@ -74,11 +74,11 @@ export const ManualAttendanceAdmin: React.FC = () => {
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-1.5">Attendance Status</label>
+              <label className="block font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">Attendance Status</label>
               <select
                 value={status}
                 onChange={(e) => setStatus(e.target.value as AttendanceStatus)}
-                className="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs focus:border-slate-900 dark:focus:border-white focus:outline-none"
+                className="input-premium text-xs"
               >
                 <option value="present">PRESENT</option>
                 <option value="late">LATE</option>
@@ -87,28 +87,28 @@ export const ManualAttendanceAdmin: React.FC = () => {
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-1.5">Audit Reason for Manual Override</label>
+              <label className="block font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">Audit Reason for Manual Override</label>
               <textarea
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 required
                 rows={3}
-                className="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs focus:border-purple-500 focus:outline-none"
+                className="input-premium text-xs focus:ring-accent"
               />
             </div>
 
             <button
               type="submit"
-              className="w-full py-3 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold text-xs uppercase tracking-wider shadow-sm hover:opacity-90 transition flex items-center justify-center gap-2"
+              className="btn-primary w-full justify-center py-2.5 shadow-sm hover:shadow-md transition-all"
             >
               <ShieldCheck className="w-4 h-4" />
-              Commit Manual Override
+              <span>Commit Manual Override</span>
             </button>
           </form>
         </div>
 
         {/* Audit Log (7 cols) */}
-        <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm space-y-4">
+        <div className="lg:col-span-7 card-elevation p-6 space-y-4">
           <h3 className="text-base font-semibold text-slate-900 dark:text-white flex items-center gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
             <History className="w-4 h-4 text-slate-500" />
             Audit Trail
