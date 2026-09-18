@@ -64,11 +64,11 @@ export const StudentDashboard: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white transition-colors p-4 sm:p-6 lg:p-8">
-      <div className="max-w-[1440px] mx-auto w-full space-y-6">
+    <div className="min-h-screen bg-surface dark:bg-surface-dark text-slate-900 dark:text-white transition-colors duration-500 p-4 sm:p-6 lg:p-8">
+      <div className="max-w-[1440px] mx-auto w-full space-y-6 animate-fade-up">
 
         {/* Top Header & Navigation Bar */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 shadow-sm">
+        <div className="card-elevation flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 sm:p-6">
           <div className="flex items-center gap-4">
             <img
               src="/assets/logos/logo.png"
@@ -80,8 +80,8 @@ export const StudentDashboard: React.FC = () => {
                 <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight font-heading leading-tight">
                   Student Portal
                 </h1>
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-teal-500/10 text-teal-700 dark:text-teal-400 border border-teal-500/20 font-heading">
-                  <span className="w-1.5 h-1.5 rounded-full bg-teal-500 animate-pulse"></span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-accent-muted text-accent font-heading">
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse"></span>
                   SBIT
                 </span>
               </div>
@@ -95,9 +95,9 @@ export const StudentDashboard: React.FC = () => {
             {/* Direct Link to Kiosk Check-In */}
             <Link
               to="/checkin"
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-teal-50 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800/60 hover:bg-teal-100 dark:hover:bg-teal-900/40 transition font-heading"
+              className="btn-outline"
             >
-              <QrCode className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+              <QrCode className="w-4 h-4 text-accent" />
               <span>Fast QR Kiosk</span>
             </Link>
 
@@ -105,7 +105,7 @@ export const StudentDashboard: React.FC = () => {
             <button
               type="button"
               onClick={toggleTheme}
-              className="p-2 rounded-xl text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:text-slate-300 border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 transition-colors shadow-xs"
+              className="p-2.5 rounded-xl text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:text-slate-300 border border-slate-200 dark:border-slate-800 bg-white dark:bg-surface-card-dark transition-colors shadow-xs"
               title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} Mode`}
             >
               {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-600" />}
@@ -114,10 +114,10 @@ export const StudentDashboard: React.FC = () => {
         </div>
 
         {/* Student Profile Welcome Card */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 shadow-sm">
+        <div className="card-elevation flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 sm:p-6">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-bold text-teal-600 dark:text-teal-400 uppercase tracking-wider font-heading">
+              <span className="text-xs font-bold text-accent uppercase tracking-wider font-heading">
                 Verified Student
               </span>
               <span className="text-slate-300 dark:text-slate-700">•</span>
@@ -137,12 +137,12 @@ export const StudentDashboard: React.FC = () => {
             {/* Biometric Status Button */}
             <button
               onClick={() => setIsFaceModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 font-heading"
+              className="btn-outline"
             >
-              <Sparkles className="w-4 h-4 text-purple-500" />
+              <Sparkles className="w-4 h-4 text-accent" />
               <span>Biometrics:</span>
               {student.faceEnrollmentStatus === 'enrolled' ? (
-                <span className="text-emerald-600 dark:text-emerald-400 font-extrabold">Enrolled ✓</span>
+                <span className="text-accent font-extrabold">Enrolled ✓</span>
               ) : (
                 <span className="text-amber-500">Enroll Face</span>
               )}
@@ -151,7 +151,7 @@ export const StudentDashboard: React.FC = () => {
             {/* Primary Quick Check-in Button */}
             <button
               onClick={() => setIsScannerOpen(true)}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100 transition-all shadow-sm font-heading"
+              className="btn-primary"
             >
               <ScanFace className="w-4 h-4" />
               <span>Scan & Check-In</span>
@@ -164,18 +164,18 @@ export const StudentDashboard: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
         {/* Live Session Check-In Card (5 cols) */}
-        <div className="lg:col-span-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs flex flex-col justify-between relative overflow-hidden">
+        <div className="lg:col-span-5 card-elevation p-6 flex flex-col justify-between relative overflow-hidden">
           <div>
             <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                <span className="w-2.5 h-2.5 rounded-full bg-accent animate-ping"></span>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white font-heading">
                   Live Lecture Status
                 </h3>
               </div>
-              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider font-heading ${
                 activeSession
-                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                  ? 'bg-accent-muted text-accent border border-accent/20'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
               }`}>
                 {activeSession ? 'Broadcasting Now' : 'Standby'}
@@ -185,12 +185,12 @@ export const StudentDashboard: React.FC = () => {
             <div className="my-6">
               {activeSession ? (
                 <div className="space-y-4">
-                  <div className="p-4 rounded-xl bg-teal-50/60 dark:bg-teal-950/20 border border-teal-200/50 dark:border-teal-800/50">
-                    <div className="flex items-center gap-2 text-xs font-bold text-teal-800 dark:text-teal-300 uppercase tracking-wide">
+                  <div className="p-4 rounded-xl bg-accent-muted/40 border border-accent/20">
+                    <div className="flex items-center gap-2 text-xs font-bold text-accent uppercase tracking-wide font-heading">
                       <BookOpen className="w-3.5 h-3.5" />
                       <span>{activeSession.sessionTitle || 'Academic Lecture Session'}</span>
                     </div>
-                    <div className="mt-2 text-xs text-slate-600 dark:text-slate-300 space-y-1">
+                    <div className="mt-2 text-xs text-slate-600 dark:text-slate-300 space-y-1 font-sans">
                       <p><span className="font-semibold">Faculty:</span> {activeSession.facultyName || 'Course Faculty'}</p>
                       <p><span className="font-semibold">Classroom:</span> {activeSession.room || 'Room 304 (Lab)'}</p>
                       <p><span className="font-semibold">Geofence:</span> Verified within 50m radius</p>
@@ -202,11 +202,11 @@ export const StudentDashboard: React.FC = () => {
                 </div>
               ) : (
                 <div className="py-8 text-center space-y-3">
-                  <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-400 flex items-center justify-center mx-auto">
+                  <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-surface-dim text-slate-400 flex items-center justify-center mx-auto">
                     <Radio className="w-8 h-8 opacity-60" />
                   </div>
                   <div>
-                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                    <p className="text-sm font-bold text-slate-800 dark:text-slate-200 font-heading">
                       No Active Lecture Session
                     </p>
                     <p className="text-xs text-slate-500 dark:text-slate-400 max-w-[280px] mx-auto mt-1">
@@ -221,7 +221,7 @@ export const StudentDashboard: React.FC = () => {
           <button
             onClick={() => setIsScannerOpen(true)}
             disabled={currentUser.status !== 'approved'}
-            className="w-full bg-slate-900 dark:bg-white hover:opacity-90 text-white dark:text-slate-900 font-bold py-3 px-4 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-all flex items-center justify-center gap-2"
+            className="btn-primary w-full justify-center py-3"
           >
             <ScanFace className="w-4 h-4" />
             <span>Launch Face & QR Scanner</span>
@@ -229,31 +229,31 @@ export const StudentDashboard: React.FC = () => {
         </div>
 
         {/* JNTUH Compliance & Overall Attendance Card (7 cols) */}
-        <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs flex flex-col justify-between">
+        <div className="lg:col-span-7 card-elevation p-6 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
               <div className="flex items-center gap-2">
-                <ShieldCheck className="w-5 h-5 text-teal-600 dark:text-teal-400" />
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                <ShieldCheck className="w-5 h-5 text-accent" />
+                <h3 className="text-base font-bold text-slate-900 dark:text-white font-heading">
                   Academic Compliance & Eligibility
                 </h3>
               </div>
-              <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border ${compliance.color}`}>
+              <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border font-heading ${compliance.color}`}>
                 {compliance.label}
               </span>
             </div>
 
             <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-6 items-center">
               <div>
-                <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider font-heading">
                   Overall Aggregate Attendance
                 </p>
                 <div className="flex items-baseline gap-1 mt-1">
-                  <span className="text-5xl font-black text-slate-900 dark:text-white tracking-tight">{myPct}</span>
+                  <span className="text-5xl font-black text-slate-900 dark:text-white tracking-tight font-heading tabular-nums">{myPct}</span>
                   <span className="text-2xl font-bold text-slate-400">%</span>
                 </div>
                 <div className="mt-3 flex items-center gap-4 text-xs font-semibold">
-                  <div className="text-emerald-600 dark:text-emerald-400">
+                  <div className="text-accent">
                     <span className="font-bold">{presentCount}</span> Attended
                   </div>
                   <div className="text-slate-400">•</div>
@@ -264,13 +264,13 @@ export const StudentDashboard: React.FC = () => {
               </div>
 
               <div className="space-y-3">
-                <div className="flex justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                <div className="flex justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider font-heading">
                   <span>Current: {myPct}%</span>
                   <span className="text-rose-500">Threshold: 75%</span>
                 </div>
-                <div className="w-full h-3 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden relative">
+                <div className="w-full h-3 bg-slate-100 dark:bg-surface-dim rounded-full overflow-hidden relative">
                   <div
-                    className="h-full bg-teal-500 rounded-full relative overflow-hidden transition-all duration-700"
+                    className="h-full bg-accent rounded-full relative overflow-hidden transition-all duration-700"
                     style={{ width: `${Math.min(myPct, 100)}%` }}
                   />
                   <div className="absolute top-0 bottom-0 w-0.5 bg-rose-500 left-[75%] z-10"></div>
@@ -282,8 +282,8 @@ export const StudentDashboard: React.FC = () => {
             </div>
           </div>
 
-          <div className="mt-6 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/60 flex items-center gap-3">
-            <Info className="w-4 h-4 text-teal-600 dark:text-teal-400 flex-shrink-0" />
+          <div className="mt-6 p-3.5 rounded-xl bg-slate-50 dark:bg-surface-dim border border-slate-200 dark:border-slate-800 flex items-center gap-3">
+            <Info className="w-4 h-4 text-accent flex-shrink-0" />
             <p className="text-xs text-slate-600 dark:text-slate-300">
               Attendance records are synced to Supabase & PostgreSQL in real-time with anti-proxy cryptographic stamps.
             </p>
@@ -291,15 +291,15 @@ export const StudentDashboard: React.FC = () => {
         </div>
 
         {/* Attendance Verification History Log (12 cols) */}
-        <div className="lg:col-span-12 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xs overflow-hidden">
+        <div className="lg:col-span-12 card-elevation overflow-hidden">
           <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
             <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">Recent Attendance Logs</h3>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white font-heading">Recent Attendance Logs</h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                 Detailed record logs with face AI confidence, eye blink liveness, and hardware biometric fallback.
               </p>
             </div>
-            <span className="px-3 py-1 rounded-full text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+            <span className="px-3 py-1 rounded-full text-xs font-bold bg-slate-100 dark:bg-surface-dim text-slate-600 dark:text-slate-300 font-heading">
               {myRecords.length} Check-ins
             </span>
           </div>
@@ -307,7 +307,7 @@ export const StudentDashboard: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[700px]">
               <thead>
-                <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 text-[11px] text-slate-500 dark:text-slate-400 uppercase tracking-wider font-bold">
+                <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-surface-dim/60 text-[11px] text-slate-500 dark:text-slate-400 uppercase tracking-wider font-bold font-heading">
                   <th className="p-4">Date & Time</th>
                   <th className="p-4">Session Title</th>
                   <th className="p-4">Faculty</th>
@@ -327,7 +327,7 @@ export const StudentDashboard: React.FC = () => {
                   myRecords.map(rec => {
                     const d = new Date(rec.markedAt);
                     return (
-                      <tr key={rec.recordId} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                      <tr key={rec.recordId} className="hover:bg-slate-50 dark:hover:bg-surface-dim/40 transition-colors">
                         <td className="p-4">
                           <div className="font-bold text-slate-900 dark:text-white">{d.toLocaleDateString()}</div>
                           <div className="text-[11px] text-slate-500 dark:text-slate-400">{d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
@@ -344,7 +344,7 @@ export const StudentDashboard: React.FC = () => {
                               ? 'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800'
                               : rec.verificationMethod === 'biometric_fallback'
                               ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
-                              : 'bg-teal-50 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800'
+                              : 'bg-accent-muted text-accent border border-accent/20'
                           }`}>
                             {rec.verificationMethod === 'face_recognition'
                               ? 'Face AI (128-D)'
@@ -363,16 +363,16 @@ export const StudentDashboard: React.FC = () => {
                               TouchID / Windows Hello ✓
                             </span>
                           ) : (
-                            <span className="text-[11px] text-slate-400">GPS {rec.gpsDistanceMeters || 18}m</span>
+                            <span className="text-[11px] text-slate-400 font-mono">GPS {rec.gpsDistanceMeters || 18}m</span>
                           )}
                         </td>
                         <td className="p-4 text-center">
-                          <span className={`inline-flex items-center justify-center px-2.5 py-1 rounded-md text-xs font-bold ${
+                          <span className={`inline-flex items-center justify-center px-2.5 py-1 rounded-md text-xs font-bold font-heading ${
                             rec.status === 'present'
-                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                              ? 'badge-eligible'
                               : rec.status === 'late'
-                              ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
-                              : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                              ? 'badge-warning'
+                              : 'badge-detained'
                           } w-full max-w-[80px]`}>
                             {rec.status.toUpperCase()}
                           </span>

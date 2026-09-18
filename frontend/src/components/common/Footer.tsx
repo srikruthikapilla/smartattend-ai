@@ -1,55 +1,47 @@
 import React from 'react';
-import { ShieldCheck, Award } from 'lucide-react';
+import { Award } from 'lucide-react';
 
 export const Footer: React.FC = () => {
   return (
-    <footer className="mt-auto bg-white dark:bg-slate-950 text-slate-500 dark:text-slate-400 border-t border-slate-200 dark:border-slate-800 py-6 transition-colors">
+    <footer className="mt-auto py-6 transition-colors">
+      {/* Accent gradient separator */}
+      <div className="h-px bg-gradient-to-r from-transparent via-accent-DEFAULT/15 to-transparent mb-6" />
+
       <div className="max-w-[1440px] mx-auto px-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center text-center md:text-left">
-
-          {/* SBIT Info */}
-          <div>
-            <h3 className="text-slate-900 dark:text-white font-bold text-sm mb-1 flex items-center justify-center md:justify-start gap-2">
-              <Award className="w-4 h-4 text-amber-500" />
-              Swarna Bharathi Institute of Science and Technology
-            </h3>
-            <p className="text-[11px] text-slate-400">
-              Approved by AICTE, New Delhi • Permanently Affiliated to JNTUH<br />
-              Khammam, Telangana - 507002
-            </p>
-          </div>
-
-          {/* Partner Logos */}
-          <div className="flex items-center justify-center space-x-6">
-            <div className="flex flex-col items-center group">
-              <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 group-hover:border-slate-400 dark:group-hover:border-slate-600 transition">
-                <img
-                  src="/assets/logos/spark-logo.png"
-                  alt="SBIT Campus Portal"
-                  className="h-12 sm:h-14 w-auto object-contain"
-                />
-              </div>
-              <span className="text-[10px] uppercase font-semibold text-slate-400 mt-1 tracking-wider">SBIT Campus AI</span>
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
+          {/* Institution */}
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-amber-500/10 flex items-center justify-center flex-shrink-0">
+              <Award className="w-3.5 h-3.5 text-amber-500" />
             </div>
-            <div className="flex flex-col items-center group">
-              <div className="p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 group-hover:border-slate-400 dark:group-hover:border-slate-600 transition">
-                <img
-                  src="/assets/logos/aicte-logo.png"
-                  alt="AICTE Approved"
-                  className="h-12 sm:h-14 w-auto object-contain"
-                />
-              </div>
-              <span className="text-[10px] uppercase font-semibold text-slate-400 mt-1 tracking-wider">AICTE Approved</span>
+            <div>
+              <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 leading-tight">
+                Swarna Bharathi Institute of Science and Technology
+              </p>
+              <p className="text-[10px] text-slate-400 dark:text-slate-500">
+                Approved by AICTE, New Delhi · Affiliated to JNTUH · Khammam, Telangana
+              </p>
             </div>
           </div>
 
-          {/* System Status */}
-          <div className="text-center md:text-right text-xs space-y-2">
-            <p className="text-slate-400 text-[11px]">
-              © {new Date().getFullYear()} SBIT Smart Campus. Designed & Developed for Enterprise Campus Automation.
-            </p>
+          {/* Partner logos — compact */}
+          <div className="flex items-center gap-4">
+            <img
+              src="/assets/logos/spark-logo.png"
+              alt="SBIT Campus AI"
+              className="h-8 w-auto object-contain opacity-60 hover:opacity-100 transition-opacity duration-300"
+            />
+            <img
+              src="/assets/logos/aicte-logo.png"
+              alt="AICTE Approved"
+              className="h-8 w-auto object-contain opacity-60 hover:opacity-100 transition-opacity duration-300"
+            />
           </div>
 
+          {/* Copyright */}
+          <p className="text-[10px] text-slate-400 dark:text-slate-500">
+            © {new Date().getFullYear()} SBIT Smart Campus
+          </p>
         </div>
       </div>
     </footer>

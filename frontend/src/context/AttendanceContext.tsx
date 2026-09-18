@@ -119,11 +119,24 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
 
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(initialAuditLogs);
-  const [geofence, setGeofence] = useState<GeofenceConfig>({
-    latitude: 17.2472,
-    longitude: 80.1514,
-    radiusMeters: 150,
-    enabled: true
+  const [geofence, setGeofence] = useState<GeofenceConfig>(() => {
+    const saved = localStorage.getItem("smartattend_campus_geofence");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed.latitude === 'number' && typeof parsed.longitude === 'number') {
+          return parsed;
+        }
+      } catch (e) {
+        // fallback
+      }
+    }
+    return {
+      latitude: 17.2472,
+      longitude: 80.1514,
+      radiusMeters: 150,
+      enabled: true
+    };
   });
 
   const [qrToken, setQrToken] = useState<string>(() => {
@@ -319,18 +332,17 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const origin = window.location.origin;
     const newToken = `${origin}/checkin?token=${rawTokenId}`;
 
-    const sessionLat = data.latitude ?? geofence.latitude ?? 17.2472;
-    const sessionLng = data.longitude ?? geofence.longitude ?? 80.1514;
-    const sessionRadius = data.radiusMeters ?? 150;
+    // Keep campus geofence anchor fixed to admin settings
+    const sessionLat = geofence.latitude ?? 17.2472;
+    const sessionLng = geofence.longitude ?? 80.1514;
+    const sessionRadius = data.radiusMeters ?? geofence.radiusMeters ?? 150;
 
     const dynamicGeofence: GeofenceConfig = {
       latitude: sessionLat,
       longitude: sessionLng,
-      radiusMeters: sessionRadius
+      radiusMeters: sessionRadius,
+      enabled: geofence.enabled ?? true
     };
-
-    // Update active geofence origin dynamically to the faculty's location
-    setGeofence(dynamicGeofence);
 
     const session: AttendanceSession = {
       sessionId: crypto.randomUUID(),
@@ -430,8 +442,25 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setSessionCountdown(0);
   };
 
-  const updateGeofence = (geo: GeofenceConfig) => {
+  const updateGeofence = async (geo: GeofenceConfig) => {
     setGeofence(geo);
+    localStorage.setItem("smartattend_campus_geofence", JSON.stringify(geo));
+
+    // Persist to backend if running
+    try {
+      await fetch('/api/admin/geofence', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          center_lat: geo.latitude,
+          center_lng: geo.longitude,
+          radius_m: geo.radiusMeters
+        })
+      });
+    } catch (err) {
+      console.warn("Backend geofence update notice:", err);
+    }
   };
 
   // Real-Time Face Recognition + Eye Blink Liveness Attendance Marking

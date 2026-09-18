@@ -68,12 +68,19 @@ interface LeafletMapProps {
 }
 
 /**
- * Internal component to re-center the map when props change.
+ * Internal component to re-center the map smoothly when props meaningfully change.
  */
 const MapRecenter: React.FC<{ lat: number; lng: number; zoom: number }> = ({ lat, lng, zoom }) => {
   const map = useMap();
+  const prevCoords = React.useRef({ lat, lng });
+
   useEffect(() => {
-    map.setView([lat, lng], zoom);
+    const diffLat = Math.abs(lat - prevCoords.current.lat);
+    const diffLng = Math.abs(lng - prevCoords.current.lng);
+    if (diffLat > 0.00005 || diffLng > 0.00005) {
+      prevCoords.current = { lat, lng };
+      map.setView([lat, lng], zoom, { animate: true });
+    }
   }, [lat, lng, zoom, map]);
   return null;
 };

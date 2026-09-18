@@ -9,7 +9,6 @@ import { ThemeProvider } from "./context/ThemeContext";
 import { AuthProvider } from "./context/AuthContext";
 import { AttendanceProvider } from "./context/AttendanceContext";
 
-console.log("MAIN LOADED");
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <BrowserRouter>

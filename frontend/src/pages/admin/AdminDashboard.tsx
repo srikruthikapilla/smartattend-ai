@@ -10,6 +10,7 @@ import { exportAttendanceToExcel } from '../../utils/excelGenerator';
 import { LeafletMap } from '../../components/gps/LeafletMap';
 import { StudentAttendanceLookupModal } from '../../components/attendance/StudentAttendanceLookupModal';
 import { AdminModal } from '../../components/admin/AdminModal';
+import { StatCard } from '../../components/common/StatCard';
 import { UserProfile } from '../../types/auth';
 import { AttendanceRecord } from '../../types/attendance';
 import {
@@ -145,121 +146,93 @@ export const AdminDashboard: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2.5">
           <button
             onClick={() => setIsAdminModalOpen(true)}
-            className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold font-heading flex items-center gap-2 transition-all shadow-xs hover:shadow-indigo-500/20 active:scale-[0.98]"
+            className="btn-secondary"
             title="Manage administrators, add new admins, or delete accounts"
           >
             <Shield className="w-4 h-4" />
-            <span>Manage Admins</span>
+            <span>Manage admins</span>
           </button>
           <button
             onClick={() => {
               setSelectedStudentLookup('');
               setIsStudentLookupOpen(true);
             }}
-            className="bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold font-heading flex items-center gap-2 transition-all shadow-xs active:scale-[0.98]"
-            title="Lookup student attendance records & eligibility"
+            className="btn-secondary"
+            title="Lookup student attendance records and eligibility"
           >
             <UserCheck className="w-4 h-4" />
-            <span>Check Student Attendance</span>
+            <span>Student lookup</span>
           </button>
           <button
             onClick={() => setIsInsertModalOpen(true)}
-            className="bg-teal-600 hover:bg-teal-500 text-white px-4 py-2.5 rounded-xl text-xs font-bold font-heading flex items-center gap-2 transition-all shadow-xs hover:shadow-teal-500/20 active:scale-[0.98]"
+            className="btn-primary"
             title="Import students via Excel (.xlsx) / CSV or manual entry"
           >
             <FileSpreadsheet className="w-4 h-4" />
-            <span>Import Students</span>
+            <span>Import students</span>
           </button>
           <button
             onClick={() => setIsGPSModalOpen(true)}
-            className="bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 px-4 py-2.5 rounded-xl text-xs font-bold font-heading flex items-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-700/80 transition-all shadow-2xs active:scale-[0.98]"
+            className="btn-outline"
           >
-            <MapPin className="w-4 h-4 text-emerald-500" />
-            <span>GPS Geofence</span>
+            <MapPin className="w-4 h-4 text-accent-DEFAULT" />
+            <span>GPS geofence</span>
           </button>
           <Link
             to="/attendance/live"
-            className="bg-slate-900 dark:bg-white text-white dark:text-slate-900 px-4 py-2.5 rounded-xl text-xs font-bold font-heading flex items-center gap-2 hover:bg-slate-800 dark:hover:bg-slate-100 transition-all shadow-xs active:scale-[0.98]"
+            className="btn-primary"
           >
-            <Radio className="w-4 h-4 text-emerald-500 animate-pulse" />
-            <span>Live Stream</span>
+            <Radio className="w-4 h-4 animate-pulse" />
+            <span>Live stream</span>
           </Link>
           <button
             onClick={() => exportAttendanceToExcel(attendanceRecords, 'SBIT_Admin_Attendance')}
-            className="bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 px-4 py-2.5 rounded-xl text-xs font-bold font-heading flex items-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-700/80 transition-all shadow-2xs active:scale-[0.98]"
+            className="btn-outline"
           >
-            <Download className="w-4 h-4 text-slate-500" />
-            <span>Export Report</span>
+            <Download className="w-4 h-4" />
+            <span>Export</span>
           </button>
         </div>
       </div>
 
-      {/* Stats Bento Grid */}
+      {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mb-6">
-        {/* Stat 1: Total Students */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 flex flex-col justify-between hover:shadow-md transition-shadow">
-          <div className="flex justify-between items-start mb-4">
-            <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Total Students</span>
-            <GraduationCap className="w-5 h-5 text-slate-400 opacity-60" />
-          </div>
-          <div>
-            <div className="text-3xl font-semibold text-slate-900 dark:text-white tracking-tight">{totalStudents > 0 ? totalStudents.toLocaleString() : '—'}</div>
-            <div className={`text-[11px] font-semibold mt-1 flex items-center gap-1 uppercase tracking-wider ${studentsThisWeek > 0 ? 'text-teal-600 dark:text-teal-400' : 'text-slate-400'}`}>
-              <TrendingUp className="w-3 h-3" /> {studentsThisWeek > 0 ? `+${studentsThisWeek} this week` : 'No new this week'}
-            </div>
-          </div>
+        <div className="animate-fade-up stagger-1">
+          <StatCard
+            title="Total students"
+            value={totalStudents > 0 ? totalStudents.toLocaleString() : '—'}
+            icon={GraduationCap}
+            color="accent"
+            trend={studentsThisWeek > 0 ? { value: `+${studentsThisWeek} this week`, isPositive: true } : undefined}
+          />
         </div>
-
-        {/* Stat 2: Avg Attendance */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 flex flex-col justify-between hover:shadow-md transition-shadow">
-          <div className="flex justify-between items-start mb-4">
-            <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Avg Attendance</span>
-            <BarChart3 className="w-5 h-5 text-slate-400 opacity-60" />
-          </div>
-          <div>
-            <div className="text-3xl font-semibold text-slate-900 dark:text-white tracking-tight">{attendancePct}%</div>
-            {attendanceDelta !== null ? (
-              <div className={`text-[11px] font-semibold mt-1 flex items-center gap-1 uppercase tracking-wider ${attendanceDelta >= 0 ? 'text-teal-600 dark:text-teal-400' : 'text-red-500'}`}>
-                {attendanceDelta >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                {attendanceDelta > 0 ? `+${attendanceDelta}%` : `${attendanceDelta}%`} from yesterday
-              </div>
-            ) : (
-              <div className="text-[11px] font-semibold text-slate-400 mt-1 uppercase tracking-wider">No data yet</div>
-            )}
-          </div>
+        <div className="animate-fade-up stagger-2">
+          <StatCard
+            title="Avg attendance"
+            value={`${attendancePct}%`}
+            icon={BarChart3}
+            color="accent"
+            subtitle={attendanceDelta === null ? 'No data yet' : undefined}
+            trend={attendanceDelta !== null ? { value: `${attendanceDelta > 0 ? '+' : ''}${attendanceDelta}% from yesterday`, isPositive: attendanceDelta >= 0 } : undefined}
+          />
         </div>
-
-        {/* Stat 3: Active Sessions */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 flex flex-col justify-between relative overflow-hidden hover:shadow-md transition-shadow">
-          <div className="absolute inset-0 bg-slate-900/5 dark:bg-white/5"></div>
-          <div className="flex justify-between items-start mb-4 relative z-10">
-            <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Active Sessions</span>
-            <Radio className="w-5 h-5 text-slate-400 opacity-60" />
-          </div>
-          <div className="relative z-10">
-            <div className="text-3xl font-semibold text-slate-900 dark:text-white tracking-tight">
-              {activeSession ? '1' : '0'}
-            </div>
-            <div className="text-[11px] font-semibold text-teal-600 dark:text-teal-400 mt-1 flex items-center gap-1 uppercase tracking-wider">
-              <span className="relative flex h-2 w-2 mr-1">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-500 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-teal-500"></span>
-              </span>
-              {activeSession ? 'Live Now' : 'No Active'}
-            </div>
-          </div>
+        <div className="animate-fade-up stagger-3">
+          <StatCard
+            title="Active sessions"
+            value={activeSession ? '1' : '0'}
+            icon={Radio}
+            color="accent"
+            subtitle={activeSession ? 'Live now' : 'No active'}
+          />
         </div>
-
-        {/* Stat 4: Pending Approvals */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-4 flex flex-col justify-between hover:shadow-md transition-shadow">
-          <div className="flex justify-between items-start mb-4">
-            <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pending Approvals</span>
-            <UserPlus className="w-5 h-5 text-slate-400 opacity-60" />
-          </div>
-          <div>
-            <div className="text-3xl font-semibold text-slate-900 dark:text-white tracking-tight">{pendingStudents.length}</div>
-            <div className="text-[11px] font-semibold text-amber-600 dark:text-amber-400 mt-1 uppercase tracking-wider">Awaiting verification</div>
-          </div>
+        <div className="animate-fade-up stagger-4">
+          <StatCard
+            title="Pending approvals"
+            value={pendingStudents.length}
+            icon={UserPlus}
+            color="amber"
+            subtitle="Awaiting verification"
+          />
         </div>
       </div>
 
@@ -267,7 +240,8 @@ export const AdminDashboard: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
 
         {/* Live System Analytics Chart (2 cols) */}
-        <div className="lg:col-span-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden flex flex-col">
+        <div className="lg:col-span-2 card-premium">
+          <div className="card-premium-inner !p-0 overflow-hidden flex flex-col">
           <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
             <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Live System Analytics</h3>
             <div className="flex gap-2">
@@ -333,16 +307,22 @@ export const AdminDashboard: React.FC = () => {
               ))}
             </div>
           </div>
+          </div>
         </div>
 
         {/* Geofencing Status (1 col) */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden flex flex-col">
-          <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-white flex items-center gap-2">
-              <MapPin className="w-5 h-5 text-teal-600 dark:text-teal-400" /> Geofencing
+        <div className="card-premium">
+          <div className="card-premium-inner !p-0 overflow-hidden flex flex-col">
+          <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50/80 dark:bg-surface-dim/50">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2 font-heading">
+              <MapPin className="w-4 h-4 text-accent" /> Campus Geofence
             </h3>
-            <span className="bg-teal-600/10 text-teal-700 dark:text-teal-400 px-2 py-1 rounded text-[11px] font-bold uppercase tracking-wider border border-teal-600/20">
-              Active
+            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider font-heading ${
+              geofence.enabled !== false
+                ? 'bg-accent-muted text-accent border border-accent/20'
+                : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+            }`}>
+              {geofence.enabled !== false ? 'Enforced' : 'Disabled'}
             </span>
           </div>
           {/* Real OpenStreetMap via Leaflet */}
@@ -353,6 +333,7 @@ export const AdminDashboard: React.FC = () => {
               radiusMeters={geofence.radiusMeters || 150}
               height="192px"
               zoom={16}
+              showRadius={geofence.enabled !== false}
               students={attendanceRecords
                 .filter(r => r.studentLat && r.studentLng)
                 .slice(0, 50)
@@ -366,39 +347,47 @@ export const AdminDashboard: React.FC = () => {
                 }))}
             />
           </div>
-          <div className="p-4 space-y-3 flex-1">
-            <div className="flex justify-between items-center text-sm border-b border-slate-100 dark:border-slate-800 pb-2">
-              <span className="text-slate-500 dark:text-slate-400">Main Campus Zone</span>
-              <span className="text-slate-900 dark:text-white font-medium">Radius: {geofence.radiusMeters || 500}m</span>
+          <div className="p-4 space-y-3 flex-1 text-xs">
+            <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-2">
+              <span className="text-slate-500 dark:text-slate-400 font-medium">Campus Anchor</span>
+              <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
+                {(geofence.latitude || 17.2472).toFixed(4)}, {(geofence.longitude || 80.1514).toFixed(4)}
+              </span>
             </div>
-            <div className="flex justify-between items-center text-sm border-b border-slate-100 dark:border-slate-800 pb-2">
-              <span className="text-slate-500 dark:text-slate-400">GPS Integrity</span>
-              <span className={`${gpsIntegrity >= 90 ? 'text-teal-600 dark:text-teal-400' : gpsIntegrity >= 70 ? 'text-amber-600 dark:text-amber-400' : 'text-red-500'} font-medium`}>
+            <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-2">
+              <span className="text-slate-500 dark:text-slate-400 font-medium">Perimeter Radius</span>
+              <span className="font-mono font-bold text-accent">{geofence.radiusMeters || 150}m Active</span>
+            </div>
+            <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-2">
+              <span className="text-slate-500 dark:text-slate-400 font-medium">GPS Integrity</span>
+              <span className={`${gpsIntegrity >= 90 ? 'text-accent' : gpsIntegrity >= 70 ? 'text-amber-500' : 'text-rose-500'} font-bold font-heading`}>
                 {gpsIntegrity}% {gpsIntegrity >= 90 ? 'High' : gpsIntegrity >= 70 ? 'Medium' : 'Low'}
               </span>
             </div>
-            <div className="flex justify-between items-center text-sm">
-              <span className="text-slate-500 dark:text-slate-400">Out of Bounds Today</span>
-              <span className={`${outOfBoundsToday > 0 ? 'text-red-500' : 'text-teal-600 dark:text-teal-400'} font-medium`}>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-500 dark:text-slate-400 font-medium">Out of Bounds Today</span>
+              <span className={`${outOfBoundsToday > 0 ? 'text-rose-500' : 'text-accent'} font-bold font-heading`}>
                 {outOfBoundsToday} {outOfBoundsToday === 1 ? 'Student' : 'Students'}
               </span>
             </div>
           </div>
-          <div className="p-3 bg-slate-50 dark:bg-slate-800/50 text-center border-t border-slate-200 dark:border-slate-800">
+          <div className="p-3 bg-slate-50 dark:bg-surface-dim/50 text-center border-t border-slate-200 dark:border-slate-800">
             <button
               onClick={() => setIsGPSModalOpen(true)}
-              className="text-xs font-semibold uppercase tracking-wider text-slate-900 dark:text-white hover:underline flex items-center justify-center gap-1 mx-auto"
+              className="text-xs font-bold uppercase tracking-wider text-accent hover:underline flex items-center justify-center gap-1.5 mx-auto font-heading transition"
             >
               <MapPin className="w-3.5 h-3.5" />
-              Manage Zones & Parameters →
+              Configure Campus Location & Radius →
             </button>
+          </div>
           </div>
         </div>
       </div>
 
       {/* Active Session & Live QR Broadcast */}
       {activeSession && (
-        <div className="mt-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm max-w-md mx-auto">
+        <div className="mt-6 card-premium max-w-md mx-auto">
+          <div className="card-premium-inner">
           <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100 dark:border-slate-800">
             <h3 className="text-base font-bold text-slate-900 dark:text-white font-heading">
               Live Innovation Centre Broadcast
@@ -408,6 +397,7 @@ export const AdminDashboard: React.FC = () => {
             </span>
           </div>
           <QRGenerator />
+          </div>
         </div>
       )}
 
@@ -423,7 +413,8 @@ export const AdminDashboard: React.FC = () => {
 
       {/* Pending Approvals */}
       {pendingStudents.length > 0 && (
-        <div className="mt-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+        <div className="mt-6 card-premium">
+          <div className="card-premium-inner !p-0 overflow-hidden">
           <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <UserPlus className="w-5 h-5 text-amber-500" />
@@ -470,11 +461,13 @@ export const AdminDashboard: React.FC = () => {
               </tbody>
             </table>
           </div>
+          </div>
         </div>
       )}
 
       {/* Faculty Management Table */}
-      <div className="mt-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+      <div className="mt-6 card-premium">
+        <div className="card-premium-inner !p-0 overflow-hidden">
         <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Faculty Management</h3>
           <div className="flex items-center gap-2.5 w-full sm:w-auto">
@@ -593,10 +586,12 @@ export const AdminDashboard: React.FC = () => {
             </tbody>
           </table>
         </div>
+        </div>
       </div>
 
       {/* Administrators Management Table */}
-      <div className="mt-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+      <div className="mt-6 card-premium">
+        <div className="card-premium-inner !p-0 overflow-hidden">
         <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <ShieldCheck className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
@@ -694,6 +689,7 @@ export const AdminDashboard: React.FC = () => {
               })}
             </tbody>
           </table>
+        </div>
         </div>
       </div>
 

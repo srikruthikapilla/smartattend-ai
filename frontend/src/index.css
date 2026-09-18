@@ -1,26 +1,249 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+/* ── Fonts: Self-hosted Geist + Plus Jakarta Sans via Google Fonts CDN ── */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500;1,600&display=swap');
+
+/* Geist via fontsource CDN (self-host ready, swap-safe) */
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('https://cdn.jsdelivr.net/fontsource/fonts/geist-sans:vf@latest/latin-wght-normal.woff2') format('woff2-variations');
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('https://cdn.jsdelivr.net/fontsource/fonts/geist-mono:vf@latest/latin-wght-normal.woff2') format('woff2-variations');
+}
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ── CSS Custom Properties (single source of truth) ── */
+:root {
+  --accent: #0d9488;
+  --accent-light: #14b8a6;
+  --accent-dark: #0f766e;
+  --accent-glow: rgba(13, 148, 136, 0.25);
+  --accent-muted: rgba(13, 148, 136, 0.12);
+  --surface-bg: #fafafa;
+  --surface-card: #ffffff;
+  --surface-dim: #f1f3f5;
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --border-default: #e2e8f0;
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --shadow-color: rgba(0, 0, 0, 0.04);
+  --radius-card: 0.75rem;
+  --transition-premium: cubic-bezier(0.32, 0.72, 0, 1);
+  --transition-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dark {
+  --surface-bg: #0a0a0f;
+  --surface-card: #111118;
+  --surface-dim: #16161f;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --border-default: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.04);
+  --shadow-color: rgba(0, 0, 0, 0.3);
+}
+
 @layer base {
   html {
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-family: 'Geist', system-ui, -apple-system, sans-serif;
     overflow-x: hidden;
     width: 100%;
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
-  
+
   h1, h2, h3, h4, h5, h6, .font-heading {
-    font-family: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif;
-    letter-spacing: -0.02em;
+    font-family: 'Plus Jakarta Sans', 'Geist', system-ui, -apple-system, sans-serif;
+    letter-spacing: -0.025em;
   }
 
   body {
-    @apply bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 antialiased selection:bg-teal-500/20 selection:text-teal-800 dark:selection:bg-teal-500/30 dark:selection:text-teal-200 font-sans;
+    @apply bg-[#fafafa] dark:bg-[#0a0a0f] text-slate-900 dark:text-slate-100 antialiased font-sans;
     overflow-x: hidden;
     width: 100%;
     min-width: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Selection highlight with accent color */
+  ::selection {
+    background: rgba(13, 148, 136, 0.2);
+    color: #0f766e;
+  }
+  .dark ::selection {
+    background: rgba(13, 148, 136, 0.3);
+    color: #5eead4;
+  }
+
+  /* Focus ring: consistent accent ring across all interactive elements */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 0.375rem;
+  }
+}
+
+/* ──── Design System: Premium Card Elevation ──── */
+@layer components {
+  .card-elevation {
+    @apply bg-white dark:bg-surface-card-dark rounded-lg transition-all duration-300;
+    border: 1px solid var(--border-default);
+    box-shadow: 0 1px 3px var(--shadow-color), 0 1px 2px var(--shadow-color);
+  }
+  .card-elevation:hover {
+    box-shadow: 0 8px 25px var(--shadow-color), 0 2px 6px var(--shadow-color);
+    transform: translateY(-1px);
+  }
+
+  /* ── Double-Bezel Card (premium nested architecture) ── */
+  .card-premium {
+    @apply rounded-xl p-[1px] transition-all duration-300;
+    background: linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.08) 0%,
+      rgba(255, 255, 255, 0.02) 100%
+    );
+    border: 1px solid var(--border-default);
+  }
+  .dark .card-premium {
+    background: linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.06) 0%,
+      rgba(255, 255, 255, 0.01) 100%
+    );
+  }
+  .card-premium:hover {
+    border-color: rgba(13, 148, 136, 0.3);
+    box-shadow: 0 8px 25px var(--shadow-color), 0 0 0 1px rgba(13, 148, 136, 0.08);
+    transform: translateY(-1px);
+  }
+  .card-premium-inner {
+    @apply bg-white dark:bg-surface-card-dark rounded-[calc(0.75rem-1px)] p-4;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  /* ── Glass Panels (true glassmorphism with edge refraction) ── */
+  .glass-panel {
+    @apply backdrop-blur-xl rounded-xl transition-all duration-300;
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.8);
+    box-shadow:
+      0 4px 12px rgba(0, 0, 0, 0.04),
+      0 1px 3px rgba(0, 0, 0, 0.03),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  }
+  .dark .glass-panel {
+    background: rgba(17, 17, 24, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow:
+      0 4px 12px rgba(0, 0, 0, 0.35),
+      0 1px 3px rgba(0, 0, 0, 0.25),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .glass-card {
+    @apply backdrop-blur-sm rounded-xl transition-all duration-300;
+    background: rgba(248, 250, 252, 0.85);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+  }
+  .dark .glass-card {
+    background: rgba(22, 22, 31, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .glass-card:hover {
+    border-color: rgba(13, 148, 136, 0.2);
+  }
+
+  /* ── Premium Button Base ── */
+  .btn-premium {
+    @apply inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold font-heading transition-all duration-300 ease-premium;
+    transform: translateZ(0);
+  }
+  .btn-premium:hover {
+    transform: translateY(-1px);
+  }
+  .btn-premium:active {
+    transform: translateY(0) scale(0.98);
+  }
+
+  .btn-primary {
+    @apply btn-premium bg-accent text-white;
+    box-shadow: 0 2px 8px rgba(13, 148, 136, 0.2);
+  }
+  .btn-primary:hover {
+    @apply bg-accent-light;
+    box-shadow: 0 4px 16px rgba(13, 148, 136, 0.3);
+  }
+
+  .btn-secondary {
+    @apply btn-premium bg-slate-900 dark:bg-white text-white dark:text-slate-900;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  }
+  .btn-secondary:hover {
+    @apply bg-slate-800 dark:bg-slate-100;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  }
+
+  .btn-outline {
+    @apply btn-premium bg-white dark:bg-surface-elevated-dark text-slate-800 dark:text-slate-200;
+    border: 1px solid var(--border-default);
+  }
+  .btn-outline:hover {
+    border-color: rgba(13, 148, 136, 0.3);
+    @apply bg-slate-50 dark:bg-surface-dim;
+  }
+
+  /* ── Input Focus Ring ── */
+  .input-premium {
+    @apply w-full px-4 py-3 bg-surface dark:bg-surface-dark rounded-lg text-sm transition-all duration-300;
+    border: 1px solid var(--border-default);
+  }
+  .input-premium:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-muted), 0 0 12px rgba(13, 148, 136, 0.08);
+  }
+  .input-premium::placeholder {
+    @apply text-slate-400 dark:text-slate-500;
+  }
+
+  /* ── Status Badges ── */
+  .badge-eligible {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-accent-muted border font-heading;
+    color: var(--accent-dark);
+    border-color: rgba(13, 148, 136, 0.2);
+  }
+  .dark .badge-eligible {
+    color: var(--accent-light);
+  }
+
+  .badge-warning {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-600/10 text-amber-700 dark:text-amber-400 border border-amber-600/20 font-heading;
+  }
+
+  .badge-detained {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-red-600/10 text-red-700 dark:text-red-400 border border-red-600/20 font-heading;
+  }
+
+  /* ── Stat Glow (accent icon background) ── */
+  .stat-icon-wrap {
+    @apply w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-300;
+    background: var(--accent-muted);
+  }
+  .stat-icon-wrap > svg {
+    color: var(--accent);
   }
 }
 
@@ -31,7 +254,6 @@
   width: auto;
   height: auto;
 }
-/* Ensure the map container has z-index lower than modals */
 .leaflet-container {
   z-index: 10;
 }
@@ -49,19 +271,23 @@
 
 /* Premium Popup Styling */
 .custom-popup .leaflet-popup-content-wrapper {
-  @apply bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200/80 dark:border-slate-800/80 shadow-xl rounded-xl p-1;
+  @apply backdrop-blur-md shadow-xl rounded-xl p-1;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+.dark .custom-popup .leaflet-popup-content-wrapper {
+  background: rgba(17, 17, 24, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 .custom-popup .leaflet-popup-tip {
-  @apply bg-white/95 dark:bg-slate-900/95 border border-slate-200/80 dark:border-slate-800/80;
+  @apply bg-white/95 dark:bg-surface-card-dark/95;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+.dark .custom-popup .leaflet-popup-tip {
+  border-color: rgba(255, 255, 255, 0.06);
 }
 .custom-popup .leaflet-popup-close-button {
   @apply text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors mt-1 mr-1;
-}
-
-/* ──── Shimmer Animation ──── */
-@keyframes shimmer {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(100%); }
 }
 
 /* ──── Radar Sweep (QR Scanner HUD) ──── */
@@ -103,45 +329,38 @@
   animation: headShake 0.4s ease-in-out;
 }
 
-/* ──── Design System: Card Elevation ──── */
-.card-elevation {
-  @apply bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg transition-all duration-200;
-}
-.card-elevation:hover {
-  @apply shadow-md shadow-slate-200/60 dark:shadow-slate-950/40;
-}
+/* ──── Staggered Entry Animation Delays ──── */
+.stagger-1 { animation-delay: 0ms; }
+.stagger-2 { animation-delay: 60ms; }
+.stagger-3 { animation-delay: 120ms; }
+.stagger-4 { animation-delay: 180ms; }
+.stagger-5 { animation-delay: 240ms; }
+.stagger-6 { animation-delay: 300ms; }
 
-/* ──── Design System: Glass Panels ──── */
-.glass-panel {
-  @apply bg-white/95 dark:bg-slate-900/90 backdrop-blur-md border border-slate-200/90 dark:border-slate-800/80 shadow-xl rounded-xl;
-}
-
-.glass-card {
-  @apply bg-slate-50/90 dark:bg-slate-800/60 backdrop-blur-sm border border-slate-200/80 dark:border-slate-700/50 rounded-xl transition-all duration-200 hover:border-slate-300 dark:hover:border-slate-600/80;
-}
-
-/* ──── Design System: Status Badges ──── */
-.badge-eligible {
-  @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-teal-600/10 text-teal-700 dark:text-teal-400 border border-teal-600/20 font-heading;
-}
-.badge-warning {
-  @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-amber-600/10 text-amber-700 dark:text-amber-400 border border-amber-600/20 font-heading;
-}
-.badge-detained {
-  @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold bg-red-600/10 text-red-700 dark:text-red-400 border border-red-600/20 font-heading;
-}
-
-/* ──── Custom Scrollbars ──── */
+/* ──── Custom Scrollbars (refined) ──── */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
-  @apply bg-slate-100 dark:bg-slate-900;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   @apply bg-slate-300 dark:bg-slate-700 rounded-full;
 }
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-slate-400 dark:bg-slate-600;
+}
+
+/* ──── Noise / Grain Overlay (fixed, non-interactive) ──── */
+.noise-overlay::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  mix-blend-mode: overlay;
 }

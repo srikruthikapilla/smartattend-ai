@@ -63,7 +63,7 @@ const AuthenticatedShell: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white transition-colors">
+    <div className="min-h-screen bg-surface-DEFAULT dark:bg-surface-dark text-slate-900 dark:text-white transition-colors duration-500 ease-premium">
       <Sidebar
         collapsed={isSidebarCollapsed}
         onToggleCollapse={() => setIsSidebarCollapsed(prev => !prev)}
@@ -71,7 +71,7 @@ const AuthenticatedShell: React.FC<{ children: React.ReactNode }> = ({ children 
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
       />
       <div
-        className={`flex flex-col min-h-screen transition-all duration-300 ${
+        className={`flex flex-col min-h-screen transition-all duration-500 ease-premium ${
           isSidebarCollapsed ? 'md:ml-20' : 'md:ml-64'
         }`}
       >

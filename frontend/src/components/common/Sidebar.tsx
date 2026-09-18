@@ -31,16 +31,29 @@ const SidebarLink: React.FC<SidebarLinkProps> = ({ to, icon, label, badge, colla
     onClick={onClick}
     title={collapsed ? label : undefined}
     className={({ isActive }) =>
-      `flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm transition-all duration-200 ${isActive
-        ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold shadow-sm'
-        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-white font-medium'
+      `group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-all duration-300 ease-premium relative ${isActive
+        ? 'bg-accent-muted text-accent-DEFAULT dark:text-accent-light font-semibold'
+        : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-white/[0.04] hover:text-slate-800 dark:hover:text-slate-200 font-medium'
       } ${collapsed ? 'justify-center px-2' : ''}`
     }
   >
-    <span className="flex-shrink-0 w-4 h-4">{icon}</span>
+    {/* Active indicator bar */}
+    <NavLink
+      to={to}
+      className={({ isActive }) =>
+        `absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-r-full transition-all duration-300 ${
+          isActive ? 'h-5 bg-accent-DEFAULT' : 'h-0 bg-transparent'
+        }`
+      }
+      tabIndex={-1}
+      aria-hidden
+    >
+      {() => null}
+    </NavLink>
+    <span className="flex-shrink-0 w-4 h-4 transition-transform duration-300 ease-premium group-hover:translate-x-[2px]">{icon}</span>
     {!collapsed && <span className="text-xs tracking-tight truncate">{label}</span>}
     {!collapsed && badge !== undefined && badge > 0 && (
-      <span className="ml-auto px-2 py-0.5 text-[10px] font-bold bg-rose-500 text-white rounded-full shadow-sm">
+      <span className="ml-auto px-1.5 py-0.5 text-[10px] font-bold bg-rose-500 text-white rounded-full min-w-[18px] text-center">
         {badge}
       </span>
     )}
@@ -64,11 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   if (!currentUser) return null;
 
   const role = currentUser.role;
-  const portalLabel = role === 'admin' ? 'Admin Portal' : 'Faculty Portal';
-  const roleColor = role === 'admin' ? 'bg-blue-600' : 'bg-indigo-600';
-  const roleIcon = role === 'admin'
-    ? <Shield className="w-3.5 h-3.5" />
-    : <GraduationCap className="w-3.5 h-3.5" />;
+  const portalLabel = role === 'admin' ? 'Admin' : 'Faculty';
 
   const sidebarContent = (isMobile: boolean) => (
     <div className="flex flex-col h-full py-5 px-3">
@@ -78,19 +87,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <img
             src="/assets/logos/logo.png"
             alt="Smart Attend Logo"
-            className="w-10 h-10 object-contain cursor-pointer transition-transform hover:scale-105"
+            className="w-9 h-9 object-contain cursor-pointer transition-transform duration-300 ease-premium hover:scale-105"
             onClick={onToggleCollapse}
           />
         ) : (
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <img
               src="/assets/logos/logo.png"
               alt="Smart Attend Logo"
-              className="w-20 h-20 object-contain flex-shrink-0"
+              className="w-9 h-9 object-contain flex-shrink-0"
             />
             <div>
-              <p className="text-sm font-extrabold text-slate-900 dark:text-white leading-tight font-heading">Smart Attend</p>
-              <p className={`text-[10px] uppercase font-bold tracking-wider ${role === 'admin' ? 'text-blue-600 dark:text-blue-400' : 'text-indigo-600 dark:text-indigo-400'}`}>
+              <p className="text-sm font-bold text-slate-900 dark:text-white leading-tight font-heading tracking-tight">Smart Attend</p>
+              <p className="text-[10px] font-semibold text-accent-DEFAULT dark:text-accent-light tracking-wider uppercase">
                 {portalLabel}
               </p>
             </div>
@@ -101,8 +110,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             onClick={onCloseMobile}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
-            title="Close Menu"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-all duration-300 ease-premium"
+            title="Close menu"
           >
             <X className="w-5 h-5" />
           </button>
@@ -110,8 +119,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             onClick={onToggleCollapse}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
-            title={collapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-all duration-300 ease-premium"
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
           </button>
@@ -119,47 +128,53 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Navigation Links */}
-      <nav className="flex-1 flex flex-col gap-1.5 overflow-y-auto pr-1">
-        {(isMobile || !collapsed) && (
-          <div className="px-3 text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">
-            {portalLabel}
-          </div>
-        )}
-
+      <nav className="flex-1 flex flex-col gap-1 overflow-y-auto pr-1">
         {/* Admin Navigation */}
         {role === 'admin' && (
           <>
-            <SidebarLink to="/admin/dashboard" icon={<LayoutDashboard className="w-4 h-4" />} label="Control Center" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
-            <SidebarLink to="/admin/approvals" icon={<UserCheck className="w-4 h-4" />} label="Student Approvals" badge={pendingStudents?.length} collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
-            <SidebarLink to="/admin/manual-attendance" icon={<Edit3 className="w-4 h-4" />} label="Manual Override" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
+            <SidebarLink to="/admin/dashboard" icon={<LayoutDashboard className="w-4 h-4" />} label="Control center" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
+            <SidebarLink to="/admin/approvals" icon={<UserCheck className="w-4 h-4" />} label="Student approvals" badge={pendingStudents?.length} collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
+            <SidebarLink to="/admin/manual-attendance" icon={<Edit3 className="w-4 h-4" />} label="Manual override" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
           </>
         )}
 
         {/* Faculty Navigation */}
         {role === 'faculty' && (
           <>
-            <SidebarLink to="/faculty/dashboard" icon={<LayoutDashboard className="w-4 h-4" />} label="Faculty Dashboard" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
-            <SidebarLink to="/faculty/manual-attendance" icon={<Edit3 className="w-4 h-4" />} label="Manual Attendance" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
+            <SidebarLink to="/faculty/dashboard" icon={<LayoutDashboard className="w-4 h-4" />} label="Dashboard" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
+            <SidebarLink to="/faculty/manual-attendance" icon={<Edit3 className="w-4 h-4" />} label="Manual attendance" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
           </>
         )}
 
-        {/* Reports & Analytics */}
-        <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800/80">
-          {(isMobile || !collapsed) && (
-            <div className="px-3 text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">
-              Reports & Insights
-            </div>
-          )}
-          <SidebarLink to="/attendance/live" icon={<Radio className="w-4 h-4 text-emerald-500 animate-pulse" />} label="Live Stream" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
-          <SidebarLink to="/reports" icon={<FileSpreadsheet className="w-4 h-4" />} label="Attendance Records" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
-          <SidebarLink to="/analytics" icon={<BarChart3 className="w-4 h-4" />} label="Visual Analytics" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
+        {/* Reports & Analytics — subtle separator */}
+        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-white/[0.04]">
+          <SidebarLink to="/attendance/live" icon={<Radio className="w-4 h-4 text-accent-DEFAULT animate-pulse" />} label="Live stream" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
+          <SidebarLink to="/reports" icon={<FileSpreadsheet className="w-4 h-4" />} label="Records" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
+          <SidebarLink to="/analytics" icon={<BarChart3 className="w-4 h-4" />} label="Analytics" collapsed={!isMobile && collapsed} onClick={isMobile ? onCloseMobile : undefined} />
         </div>
       </nav>
 
-      {/* Footer: User Profile + Logout */}
-      <div className="mt-auto pt-4 border-t border-slate-200 dark:border-slate-800">
-        {/* Profile Badge */}
-
+      {/* Footer: Profile + Logout */}
+      <div className="mt-auto pt-4 border-t border-slate-100 dark:border-white/[0.04]">
+        {/* Profile badge */}
+        {(isMobile || !collapsed) && (
+          <div className="flex items-center gap-2.5 px-2 mb-3">
+            <div className="w-8 h-8 rounded-full bg-accent-muted flex items-center justify-center flex-shrink-0">
+              <span className="text-xs font-bold text-accent-DEFAULT uppercase">
+                {currentUser.name?.charAt(0) || 'U'}
+              </span>
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate leading-tight">
+                {currentUser.name}
+              </p>
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 font-mono uppercase tracking-wider flex items-center gap-1">
+                {role === 'admin' ? <Shield className="w-2.5 h-2.5" /> : <GraduationCap className="w-2.5 h-2.5" />}
+                {role}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Logout Button */}
         <button
@@ -168,11 +183,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             if (isMobile && onCloseMobile) onCloseMobile();
             logout();
           }}
-          title="Sign Out"
-          className={`w-full flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-500 dark:text-slate-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 hover:text-rose-600 dark:hover:text-rose-400 transition-all duration-200 ${!isMobile && collapsed ? 'justify-center px-2' : ''}`}
+          title="Sign out"
+          className={`w-full flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-400 dark:text-slate-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 hover:text-rose-500 dark:hover:text-rose-400 transition-all duration-300 ease-premium ${!isMobile && collapsed ? 'justify-center px-2' : ''}`}
         >
           <LogOut className="w-4 h-4 flex-shrink-0" />
-          {(isMobile || !collapsed) && <span className="text-xs tracking-tight font-heading">Sign Out</span>}
+          {(isMobile || !collapsed) && <span className="text-xs tracking-tight font-heading">Sign out</span>}
         </button>
       </div>
     </div>
@@ -180,24 +195,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <>
-      {/* ── Desktop Fixed Sidebar (>= md) ── */}
+      {/* Desktop Fixed Sidebar (>= md) */}
       <aside
-        className={`hidden md:flex flex-col h-screen fixed left-0 top-0 z-40 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 shadow-sm transition-all duration-300 ${collapsed ? 'w-20' : 'w-64'
+        className={`hidden md:flex flex-col h-screen fixed left-0 top-0 z-40 bg-white dark:bg-surface-card-dark border-r border-slate-200/60 dark:border-white/[0.06] transition-all duration-500 ease-premium ${collapsed ? 'w-20' : 'w-64'
           }`}
       >
         {sidebarContent(false)}
       </aside>
 
-      {/* ── Mobile Slide-over Drawer (< md) ── */}
+      {/* Mobile Slide-over Drawer (< md) */}
       {isMobileOpen && (
         <div className="fixed inset-0 z-50 md:hidden flex">
           {/* Backdrop Overlay */}
           <div
-            className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs transition-opacity animate-fadeIn"
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm transition-opacity animate-fade-in"
             onClick={onCloseMobile}
           />
           {/* Drawer Panel */}
-          <aside className="relative w-72 max-w-[85vw] h-full bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 shadow-2xl z-10 transition-transform duration-300">
+          <aside className="relative w-72 max-w-[85vw] h-full bg-white dark:bg-surface-card-dark border-r border-slate-200/60 dark:border-white/[0.06] shadow-2xl z-10 animate-slide-in-left">
             {sidebarContent(true)}
           </aside>
         </div>
@@ -205,4 +220,3 @@ export const Sidebar: React.FC<SidebarProps> = ({
     </>
   );
 };
-

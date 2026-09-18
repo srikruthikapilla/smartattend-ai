@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAttendance } from '../../context/AttendanceContext';
 import { Modal } from '../common/Modal';
 import { MapPin, Navigation, Save, ShieldCheck } from 'lucide-react';
@@ -14,10 +14,19 @@ export const GPSConfigModal: React.FC<GPSConfigModalProps> = ({ isOpen, onClose 
 
   const [lat, setLat] = useState<number>(geofence.latitude || 17.2472);
   const [lng, setLng] = useState<number>(geofence.longitude || 80.1514);
-  const [radius, setRadius] = useState<number>(geofence.radiusMeters);
+  const [radius, setRadius] = useState<number>(geofence.radiusMeters || 150);
   const [enabled, setEnabled] = useState<boolean>(geofence.enabled ?? true);
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setLat(geofence.latitude || 17.2472);
+      setLng(geofence.longitude || 80.1514);
+      setRadius(geofence.radiusMeters || 150);
+      setEnabled(geofence.enabled ?? true);
+    }
+  }, [isOpen, geofence]);
 
   const captureAdminLocation = () => {
     setIsLocating(true);
