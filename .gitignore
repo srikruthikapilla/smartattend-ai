@@ -123,3 +123,7 @@ scratch/
 .agent/
 skills-lock.json
 
+# Local Docker override
+docker-compose.override.yml
+
+
