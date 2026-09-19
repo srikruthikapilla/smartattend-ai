@@ -79,14 +79,26 @@ def get_geofence(db: Session = Depends(get_db)):
         "geofence": current_geofence
     }
 
-@router.put("/geofence", dependencies=[Depends(require_role("admin"))])
-def update_geofence_config(payload: GeofenceUpdatePayload, db: Session = Depends(get_db)):
+@router.put("/geofence")
+def update_geofence_config(
+    payload: GeofenceUpdatePayload,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """
     Update campus center point + allowed radius in PostgreSQL.
-    Requires Admin authorization.
+    Requires Admin (or Faculty) authorization.
     Persists master college location and broadcasts real-time to all connected devices.
     """
-    update_geofence(payload.center_lat, payload.center_lng, payload.radius_m)
+    role = current_user.get("role", "").lower()
+    if role not in ("admin", "faculty"):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Only administrators or faculty can configure the campus geofence."
+        )
+
+    radius_m_int = int(round(payload.radius_m))
+    update_geofence(payload.center_lat, payload.center_lng, radius_m_int)
     if payload.enabled is not None:
         current_geofence["enabled"] = payload.enabled
     if payload.address is not None:
@@ -97,7 +109,7 @@ def update_geofence_config(payload: GeofenceUpdatePayload, db: Session = Depends
         if cfg:
             cfg.center_lat = payload.center_lat
             cfg.center_lng = payload.center_lng
-            cfg.radius_m = payload.radius_m
+            cfg.radius_m = radius_m_int
             if payload.enabled is not None:
                 cfg.enabled = payload.enabled
             if payload.address is not None:
@@ -108,7 +120,7 @@ def update_geofence_config(payload: GeofenceUpdatePayload, db: Session = Depends
                 id=1,
                 center_lat=payload.center_lat,
                 center_lng=payload.center_lng,
-                radius_m=payload.radius_m,
+                radius_m=radius_m_int,
                 enabled=payload.enabled if payload.enabled is not None else True,
                 address=payload.address or "SBIT Campus, Pakabanda Street, Khammam, Telangana 507002"
             )

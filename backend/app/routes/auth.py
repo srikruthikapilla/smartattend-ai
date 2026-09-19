@@ -25,7 +25,7 @@ import jwt as pyjwt
 from app.config import JWT_SECRET, COOKIE_NAME, COOKIE_MAX_AGE, COOKIE_DOMAIN, COOKIE_SECURE, COOKIE_SAMESITE
 from app.database import get_db
 from app.dependencies.auth import get_current_user, get_optional_current_user, require_role
-from app.models.db_models import Admin, Faculty, Student
+from app.models.db_models import Admin, Faculty, Student, AttendanceRecord
 from app.utils.security import hash_password, verify_password
 from app.utils.redis_client import set_otp, get_otp, delete_otp
 from app.utils.email_service import send_otp_email
@@ -121,6 +121,9 @@ class BulkStudentItem(BaseModel):
 
 class BulkUpsertRequest(BaseModel):
     students: List[BulkStudentItem]
+
+class BulkDeleteRequest(BaseModel):
+    uids: List[str]
 
 class BulkFacultyItem(BaseModel):
     name: str
@@ -283,9 +286,10 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
             samesite=COOKIE_SAMESITE
         )
         
-        # Return user profile without leaking JWT in response body
+        # Return user profile and access token for dual-authentication (cookie + Bearer)
         return {
             "success": True,
+            "token": access_token,
             "user": admin.to_dict()
         }
 
@@ -326,9 +330,10 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
             samesite=COOKIE_SAMESITE
         )
         
-        # Return user profile without leaking JWT in response body
+        # Return user profile and access token for dual-authentication (cookie + Bearer)
         return {
             "success": True,
+            "token": access_token,
             "user": faculty.to_dict()
         }
 
@@ -484,12 +489,12 @@ def register_user(
             email=clean_email,
             name=payload.name,
             phone=payload.phone,
-            branch=payload.branch or "CSM",
+            branch=payload.branch or "CSE",
             section=payload.section or "A",
             year=payload.year or "3",
             semester=payload.semester or "1",
             college=payload.college or "Swarna Bharathi Institute of Science and Technology (SBIT)",
-            status=payload.status if is_admin else "pending"
+            status=payload.status or "approved"
         )
         db.add(new_student)
         db.commit()
@@ -572,7 +577,7 @@ def delete_user(
     current_user: Dict[str, Any] = Depends(require_role("admin")),
     db: Session = Depends(get_db)
 ):
-    """Delete a user from the appropriate table. Requires Admin authorization."""
+    """Delete a user (student/faculty/admin) by ID, email, or hall ticket number."""
     clean_id = user_id.strip()
     target_uuid = None
     try:
@@ -585,6 +590,8 @@ def delete_user(
             entity = db.query(model).filter(model.id == target_uuid).first()
         else:
             entity = db.query(model).filter(func.lower(model.email) == clean_id.lower()).first()
+            if not entity and model == Student:
+                entity = db.query(Student).filter(func.upper(Student.hall_ticket_no) == clean_id.upper()).first()
 
         if entity:
             if model == Admin:
@@ -594,11 +601,70 @@ def delete_user(
                         status_code=400,
                         detail="Cannot delete the only remaining administrator account. Please add another administrator before removing this account."
                     )
+            if model == Student:
+                # Clean up associated attendance records
+                try:
+                    db.query(AttendanceRecord).filter(
+                        (AttendanceRecord.hall_ticket_no == entity.hall_ticket_no) |
+                        (AttendanceRecord.student_id == str(entity.id)) |
+                        (AttendanceRecord.student_id == entity.hall_ticket_no)
+                    ).delete(synchronize_session=False)
+                except Exception as del_err:
+                    logger.warning(f"Note cleaning student attendance records: {del_err}")
+
             db.delete(entity)
             db.commit()
-            return {"success": True, "message": f"{model.__name__} {clean_id} deleted."}
+            return {"success": True, "message": f"{model.__name__} {clean_id} deleted successfully."}
 
     raise HTTPException(status_code=404, detail=f"User '{clean_id}' not found.")
+
+
+@router.post("/users/bulk-delete")
+def bulk_delete_users(
+    payload: BulkDeleteRequest,
+    current_user: Dict[str, Any] = Depends(require_role("admin")),
+    db: Session = Depends(get_db)
+):
+    """Bulk delete users (students/faculty/admins) by UID or Hall Ticket. Requires Admin authorization."""
+    deleted_count = 0
+    for uid in payload.uids:
+        clean_id = uid.strip()
+        target_uuid = None
+        try:
+            target_uuid = uuid.UUID(clean_id)
+        except Exception:
+            pass
+
+        for model in [Student, Faculty, Admin]:
+            if target_uuid:
+                entity = db.query(model).filter(model.id == target_uuid).first()
+            else:
+                entity = db.query(model).filter(func.lower(model.email) == clean_id.lower()).first()
+                if not entity and model == Student:
+                    entity = db.query(Student).filter(func.upper(Student.hall_ticket_no) == clean_id.upper()).first()
+
+            if entity:
+                if model == Admin:
+                    admin_count = db.query(Admin).count()
+                    if admin_count <= 1:
+                        continue
+                if model == Student:
+                    try:
+                        db.query(AttendanceRecord).filter(
+                            (AttendanceRecord.hall_ticket_no == entity.hall_ticket_no) |
+                            (AttendanceRecord.student_id == str(entity.id)) |
+                            (AttendanceRecord.student_id == entity.hall_ticket_no)
+                        ).delete(synchronize_session=False)
+                    except Exception:
+                        pass
+
+                db.delete(entity)
+                deleted_count += 1
+                break
+
+    db.commit()
+    return {"success": True, "deleted_count": deleted_count, "message": f"Successfully deleted {deleted_count} user(s)."}
+
 
 
 @router.post("/users/bulk")

@@ -40,7 +40,7 @@ interface AttendanceContextType {
 
   terminateSession: () => void;
   endSession: () => void;
-  updateGeofence: (geo: GeofenceConfig) => void;
+  updateGeofence: (geo: GeofenceConfig) => Promise<boolean>;
 
   recordAttendanceFaceMatch: (
     user: any,
@@ -460,26 +460,38 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     setSessionCountdown(0);
   };
 
-  const updateGeofence = async (geo: GeofenceConfig) => {
+  const updateGeofence = async (geo: GeofenceConfig): Promise<boolean> => {
     setGeofence(geo);
     localStorage.setItem("smartattend_campus_geofence", JSON.stringify(geo));
 
-    // Persist to backend if running
+    const token = localStorage.getItem('sbit_auth_token');
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    };
+
     try {
-      await fetch('/api/admin/geofence', {
+      const res = await fetch('/api/admin/geofence', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         credentials: 'include',
         body: JSON.stringify({
-          center_lat: geo.latitude,
-          center_lng: geo.longitude,
-          radius_m: geo.radiusMeters,
+          center_lat: Number(geo.latitude),
+          center_lng: Number(geo.longitude),
+          radius_m: Math.round(Number(geo.radiusMeters)),
           enabled: geo.enabled ?? true,
           address: geo.address
         })
       });
-    } catch (err) {
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Server error (${res.status}): unable to save geofence.`);
+      }
+      return true;
+    } catch (err: any) {
       console.warn("Backend geofence update notice:", err);
+      throw err;
     }
   };
 

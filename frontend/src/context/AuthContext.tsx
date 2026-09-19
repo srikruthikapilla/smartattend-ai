@@ -121,6 +121,8 @@ interface AuthContextType {
   ): void;
 
   deleteUser(uid: string): Promise<void>;
+  bulkDeleteUsers(uids: string[]): Promise<void>;
+  getAuthHeaders(): Record<string, string>;
 
   enrollStudentFace(
     uid: string,
@@ -176,7 +178,11 @@ export const AuthProvider: React.FC<{
     });
 
   const getAuthHeaders = (): Record<string, string> => {
-    return { 'Content-Type': 'application/json' };
+    const token = localStorage.getItem('sbit_auth_token');
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    };
   };
 
   // Restore session from backend on mount
@@ -184,7 +190,7 @@ export const AuthProvider: React.FC<{
     const restoreSession = async () => {
       try {
         const res = await fetch('/api/auth/me', {
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders(),
           credentials: 'include'
         });
         if (res.ok) {
@@ -306,6 +312,9 @@ export const AuthProvider: React.FC<{
           status: u.status || 'approved',
           createdAt: u.created_at || u.createdAt || new Date().toISOString()
         };
+        if (data.token) {
+          localStorage.setItem('sbit_auth_token', data.token);
+        }
         localStorage.setItem('sbit_user', JSON.stringify(backendUser));
         setUsers(prev => {
           const exists = prev.some(usr => usr.uid === backendUser.uid || usr.email === backendUser.email);
@@ -801,7 +810,7 @@ export const AuthProvider: React.FC<{
     };
   };
 
-  const updateStudentStatus = (
+  const updateStudentStatus = async (
     uid: string,
     status: StudentStatus
   ) => {
@@ -822,6 +831,12 @@ export const AuthProvider: React.FC<{
         ...currentUser,
         status,
       });
+    }
+
+    try {
+      await updateUser(uid, { status });
+    } catch (err) {
+      console.warn("Failed to persist student status to database:", err);
     }
   };
 
@@ -878,6 +893,29 @@ export const AuthProvider: React.FC<{
     } else {
       await refreshUsers();
     }
+  };
+
+  const bulkDeleteUsers = async (uids: string[]): Promise<void> => {
+    if (!uids || uids.length === 0) return;
+    const res = await fetch('/api/auth/users/bulk-delete', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({ uids })
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Server error (${res.status})`);
+    }
+
+    const uidSet = new Set(uids.map(u => u.toLowerCase()));
+    setUsers(prev => prev.filter(user => 
+      !uidSet.has(user.uid.toLowerCase()) && 
+      !uidSet.has(user.email.toLowerCase()) && 
+      (!user.hallTicketNo || !uidSet.has(user.hallTicketNo.toLowerCase()))
+    ));
+    await refreshUsers();
   };
 
   const enrollStudentFace = async (
@@ -1174,6 +1212,8 @@ export const AuthProvider: React.FC<{
         updateStudentStatus,
         updateUser,
         deleteUser,
+        bulkDeleteUsers,
+        getAuthHeaders,
         refreshUsers,
         enrollStudentFace,
         revokeStudentFace,

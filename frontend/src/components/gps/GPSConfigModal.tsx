@@ -20,6 +20,8 @@ export const GPSConfigModal: React.FC<GPSConfigModalProps> = ({ isOpen, onClose 
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [isRefreshingServer, setIsRefreshingServer] = useState<boolean>(false);
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -79,20 +81,28 @@ export const GPSConfigModal: React.FC<GPSConfigModalProps> = ({ isOpen, onClose 
     setLng(clickLng);
   };
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateGeofence({
-      latitude: Number(lat),
-      longitude: Number(lng),
-      radiusMeters: Number(radius),
-      enabled,
-      address
-    });
-    setSavedSuccess(true);
-    setTimeout(() => {
-      setSavedSuccess(false);
-      onClose();
-    }, 1400);
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      await updateGeofence({
+        latitude: Number(lat),
+        longitude: Number(lng),
+        radiusMeters: Math.round(Number(radius)),
+        enabled,
+        address
+      });
+      setSavedSuccess(true);
+      setTimeout(() => {
+        setSavedSuccess(false);
+        onClose();
+      }, 1400);
+    } catch (err: any) {
+      setSaveError(err.message || "Failed to persist geofence location to server. Make sure you are logged in as Admin.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -233,6 +243,12 @@ export const GPSConfigModal: React.FC<GPSConfigModalProps> = ({ isOpen, onClose 
           </button>
         </div>
 
+        {saveError && (
+          <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 text-xs font-semibold">
+            {saveError}
+          </div>
+        )}
+
         {savedSuccess && (
           <div className="p-3.5 rounded-xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-200 text-xs font-semibold flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-teal-600 dark:text-teal-400 flex-shrink-0" />
@@ -249,16 +265,18 @@ export const GPSConfigModal: React.FC<GPSConfigModalProps> = ({ isOpen, onClose 
             <button
               type="button"
               onClick={onClose}
+              disabled={isSaving}
               className="px-4 py-2.5 rounded-lg text-xs font-semibold text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2.5 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold text-xs uppercase tracking-wider shadow-sm hover:opacity-90 transition flex items-center gap-2"
+              disabled={isSaving}
+              className="px-5 py-2.5 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold text-xs uppercase tracking-wider shadow-sm hover:opacity-90 transition flex items-center gap-2 disabled:opacity-50"
             >
               <Save className="w-4 h-4" />
-              Save Master Location
+              {isSaving ? "Saving to Database..." : "Save Master Location"}
             </button>
           </div>
         </div>

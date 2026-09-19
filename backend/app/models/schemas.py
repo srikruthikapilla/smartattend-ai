@@ -84,7 +84,7 @@ class VerifyCheckinPayload(BaseModel):
 class GeofenceUpdatePayload(BaseModel):
     center_lat: float
     center_lng: float
-    radius_m: int
+    radius_m: float
     enabled: Optional[bool] = True
     address: Optional[str] = None
 
