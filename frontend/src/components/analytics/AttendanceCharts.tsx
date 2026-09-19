@@ -57,7 +57,7 @@ export const AttendanceCharts: React.FC<AttendanceChartsProps> = ({ records, sel
     });
   } else {
     // Show all branches
-    const branches = ['CSE', 'AIML', 'ECE', 'IT', 'EEE', 'CIVIL', 'MECH'];
+    const branches = ['CSE', 'AI', 'DS'];
     barData = branches.map(branch => {
       const branchRecs = records.filter(r => r.branch === branch);
       return {

@@ -212,11 +212,15 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (geoRes.ok) {
           const geoData = await geoRes.json();
           if (geoData.geofence) {
-            setGeofence({
-              latitude: geoData.geofence.center_lat || 17.2472,
-              longitude: geoData.geofence.center_lng || 80.1514,
-              radiusMeters: geoData.geofence.radius_m || 150
-            });
+            const fetchedGeo: GeofenceConfig = {
+              latitude: Number(geoData.geofence.center_lat ?? 17.2472),
+              longitude: Number(geoData.geofence.center_lng ?? 80.1514),
+              radiusMeters: Number(geoData.geofence.radius_m ?? 150),
+              enabled: geoData.geofence.enabled ?? true,
+              address: geoData.geofence.address
+            };
+            setGeofence(fetchedGeo);
+            localStorage.setItem("smartattend_campus_geofence", JSON.stringify(fetchedGeo));
           }
         }
       } catch (err) {
@@ -277,7 +281,7 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           studentId: entry.studentId || ht,
           studentName: entry.name || entry.studentName || entry.student_name || `Student (${ht})`,
           hallTicketNo: ht,
-          branch: entry.department || entry.branch || 'CSM',
+          branch: entry.department || entry.branch || 'CSE',
           section: entry.section || 'A',
           year: entry.year || 3,
           markedAt: entry.timestamp || entry.marked_at || new Date().toISOString(),
@@ -303,6 +307,20 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             (r.hallTicketNo || '').toUpperCase() !== ht && r.studentId !== ht
           ));
         }
+      });
+
+      // Real-time geofence propagation from administrator to all devices
+      socket.on('geofence:update', (geoData: any) => {
+        if (!geoData) return;
+        const updatedGeo: GeofenceConfig = {
+          latitude: Number(geoData.center_lat ?? geoData.latitude ?? 17.2472),
+          longitude: Number(geoData.center_lng ?? geoData.longitude ?? 80.1514),
+          radiusMeters: Number(geoData.radius_m ?? geoData.radiusMeters ?? 150),
+          enabled: geoData.enabled ?? true,
+          address: geoData.address
+        };
+        setGeofence(updatedGeo);
+        localStorage.setItem("smartattend_campus_geofence", JSON.stringify(updatedGeo));
       });
     } catch (e) {
       console.warn("Socket.io init note:", e);
@@ -455,7 +473,9 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         body: JSON.stringify({
           center_lat: geo.latitude,
           center_lng: geo.longitude,
-          radius_m: geo.radiusMeters
+          radius_m: geo.radiusMeters,
+          enabled: geo.enabled ?? true,
+          address: geo.address
         })
       });
     } catch (err) {
@@ -732,7 +752,7 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         studentId,
         studentName: studentInfo.name,
         hallTicketNo: studentInfo.hallTicketNo,
-        branch: studentInfo.branch || activeSession?.branch || "CSM",
+        branch: studentInfo.branch || activeSession?.branch || "CSE",
         section: studentInfo.section || activeSession?.section || "A",
         year: studentInfo.year || activeSession?.year || 3,
         sessionTitle: activeSession?.sessionTitle || "Campus Lecture Session",
@@ -790,7 +810,7 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         studentId: s.uid,
         studentName: s.name,
         hallTicketNo: s.hallTicketNo || 'Pending',
-        branch: s.branch || activeSession?.branch || 'CSM',
+        branch: s.branch || activeSession?.branch || 'CSE',
         section: s.section || activeSession?.section || 'A',
         year: Number(s.year) || activeSession?.year || 3,
         sessionTitle: activeSession?.sessionTitle || 'Campus Lecture Session',
@@ -900,7 +920,7 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [activeSession]);
+  }, [activeSession?.sessionId]);
 
   const seedDemoAttendance = () => {
     const newRecords = generateSeedAttendanceRecords();

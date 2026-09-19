@@ -104,7 +104,7 @@ export const LiveAttendanceRoster: React.FC<LiveAttendanceRosterProps> = ({
           uid: rId || rHt || `rec_${record.recordId}`,
           name: record.studentName || `Student (${rHt})`,
           hallTicketNo: rHt || record.studentId || 'Pending',
-          branch: record.branch || 'CSM',
+          branch: record.branch || 'CSE',
           section: record.section || 'A',
           year: record.year || 3,
           role: 'student',
@@ -185,7 +185,7 @@ export const LiveAttendanceRoster: React.FC<LiveAttendanceRosterProps> = ({
       'S.No': idx + 1,
       'Hall Ticket / Roll No': student.hallTicketNo || 'N/A',
       'Student Name': student.name,
-      'Branch': student.branch || 'CSM',
+      'Branch': student.branch || 'CSE',
       'Section': student.section || 'A',
       'Year': student.year || 3,
       'Attendance Status': status.toUpperCase(),
@@ -560,7 +560,7 @@ export const LiveAttendanceRoster: React.FC<LiveAttendanceRosterProps> = ({
                     {/* Academic Department & Class */}
                     <td className="py-3.5 px-4">
                       <div className="font-bold text-slate-800 dark:text-slate-200 font-heading">
-                        {student.branch || 'CSM'} • Sec {student.section || 'A'}
+                        {student.branch || 'CSE'} • Sec {student.section || 'A'}
                       </div>
                       <div className="text-[10px] text-slate-400 font-medium mt-0.5">
                         Year {student.year || 3}, Sem {student.semester || 1}

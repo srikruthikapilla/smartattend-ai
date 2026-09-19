@@ -24,6 +24,8 @@ export const QRSessionManager: React.FC = () => {
       room,
       durationMinutes: duration,
       radiusMeters: geofence.radiusMeters,
+      latitude: geofence.latitude,
+      longitude: geofence.longitude,
     });
   };
 
@@ -116,12 +118,8 @@ export const QRSessionManager: React.FC = () => {
                     onChange={(e) => setBranch(e.target.value)}
                   >
                     <option value="CSE">CSE</option>
-                    <option value="ECE">ECE</option>
-                    <option value="EEE">EEE</option>
-                    <option value="MECH">MECH</option>
-                    <option value="CIVIL">CIVIL</option>
-                    <option value="IT">IT</option>
-                    <option value="AIML">AIML</option>
+                    <option value="AI">AI</option>
+                    <option value="DS">DS</option>
                   </select>
                 </div>
 

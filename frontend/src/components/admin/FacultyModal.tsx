@@ -48,7 +48,7 @@ const DESIGNATIONS = [
   'Lab Instructor'
 ];
 
-const COMMON_BRANCHES = ['CSE', 'ECE', 'AIML', 'DS', 'EEE', 'MECH', 'CIVIL'];
+const COMMON_BRANCHES = ['CSE', 'AI', 'DS'];
 
 export const FacultyModal: React.FC<FacultyModalProps> = ({
   isOpen,
@@ -350,7 +350,7 @@ export const FacultyModal: React.FC<FacultyModalProps> = ({
         'Phone': '+91 9848123456',
         'Department': 'Artificial Intelligence & ML',
         'Designation': 'Assistant Professor',
-        'Branch': 'AIML',
+        'Branch': 'AI',
         'Sections': 'A'
       }
     ];
@@ -570,7 +570,7 @@ export const FacultyModal: React.FC<FacultyModalProps> = ({
                         handleAddSection();
                       }
                     }}
-                    placeholder="e.g. CSE-A, AIML-B"
+                    placeholder="e.g. CSE-A, AI-B"
                     className="flex-1 px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 focus:outline-none transition-all uppercase placeholder:normal-case placeholder:text-slate-400"
                   />
                   <button

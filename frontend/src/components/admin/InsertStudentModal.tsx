@@ -320,7 +320,7 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
         'Hall Ticket No': '24M61A6601',
         'Full Name': 'K. Rahul Kumar',
         'Email': 'rahul.kumar@gmail.com',
-        'Branch': 'CSM',
+        'Branch': 'CSE',
         'Section': 'A',
         'Year': 3,
         'Semester': 1,
@@ -330,7 +330,7 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
         'Hall Ticket No': '24M61A6602',
         'Full Name': 'M. Sneha Reddy',
         'Email': 'sneha.reddy@gmail.com',
-        'Branch': 'CSM',
+        'Branch': 'AI',
         'Section': 'A',
         'Year': 3,
         'Semester': 1,
@@ -340,7 +340,7 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
         'Hall Ticket No': '24M61A6603',
         'Full Name': 'P. Sai Teja',
         'Email': 'sai.teja@gmail.com',
-        'Branch': 'CSM',
+        'Branch': 'DS',
         'Section': 'B',
         'Year': 3,
         'Semester': 1,
@@ -362,17 +362,16 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Insert & Import Students" maxWidth="2xl">
       <div className="space-y-6">
-        
+
         {/* Navigation Switch Tabs */}
         <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl text-xs font-bold font-heading">
           <button
             type="button"
             onClick={() => setActiveTab('single')}
-            className={`py-2.5 rounded-xl flex items-center justify-center gap-2 transition ${
-              activeTab === 'single'
-                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
+            className={`py-2.5 rounded-xl flex items-center justify-center gap-2 transition ${activeTab === 'single'
+              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+              : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
           >
             <UserPlus className="w-4 h-4 text-blue-600 dark:text-blue-400" />
             <span>Single Student Entry</span>
@@ -381,11 +380,10 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('bulk')}
-            className={`py-2.5 rounded-xl flex items-center justify-center gap-2 transition ${
-              activeTab === 'bulk'
-                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
+            className={`py-2.5 rounded-xl flex items-center justify-center gap-2 transition ${activeTab === 'bulk'
+              ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+              : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
           >
             <FileSpreadsheet className="w-4 h-4 text-teal-600 dark:text-teal-400" />
             <span>Excel / CSV Bulk Upload</span>
@@ -484,12 +482,8 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
                   className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs font-semibold focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="CSE">CSE</option>
-                  <option value="AI&DS">AI & DS</option>
-                  <option value="ECE">ECE</option>
-                  <option value="EEE">EEE</option>
-                  <option value="MECH">MECH</option>
-                  <option value="CIVIL">CIVIL</option>
-                  <option value="IT">IT</option>
+                  <option value="AI">AI</option>
+                  <option value="DS">DS</option>
                 </select>
               </div>
 
@@ -577,7 +571,7 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
         {/* ── TAB 2: EXCEL / CSV BULK IMPORT ── */}
         {activeTab === 'bulk' && (
           <div className="space-y-5">
-            
+
             {/* Template Download Row */}
             <div className="p-4 rounded-2xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="space-y-0.5">

@@ -24,7 +24,7 @@ export interface UserProfile {
   
   // Student Academic Fields (Format: 2XXXXXXXXX)
   hallTicketNo?: string; 
-  branch?: string;       // "CSE", "ECE", "EEE", "MECH", "CIVIL", "IT", "AIML"
+  branch?: string;       // "CSE", "AI", "DS"
   year?: string;         // "I", "II", "III", "IV"
   semester?: string;     // "1", "2"
   section?: string;      // "A", "B", "C", "D"

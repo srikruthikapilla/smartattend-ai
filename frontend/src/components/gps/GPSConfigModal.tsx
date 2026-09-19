@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAttendance } from '../../context/AttendanceContext';
 import { Modal } from '../common/Modal';
-import { MapPin, Navigation, Save, ShieldCheck } from 'lucide-react';
+import { MapPin, Navigation, Save, ShieldCheck, RefreshCw } from 'lucide-react';
 import { LeafletMap } from './LeafletMap';
 
 interface GPSConfigModalProps {
@@ -16,7 +16,9 @@ export const GPSConfigModal: React.FC<GPSConfigModalProps> = ({ isOpen, onClose 
   const [lng, setLng] = useState<number>(geofence.longitude || 80.1514);
   const [radius, setRadius] = useState<number>(geofence.radiusMeters || 150);
   const [enabled, setEnabled] = useState<boolean>(geofence.enabled ?? true);
+  const [address, setAddress] = useState<string>(geofence.address || 'Swarna Bharathi Institute of Science and Technology (SBIT)');
   const [isLocating, setIsLocating] = useState<boolean>(false);
+  const [isRefreshingServer, setIsRefreshingServer] = useState<boolean>(false);
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
 
   useEffect(() => {
@@ -25,8 +27,30 @@ export const GPSConfigModal: React.FC<GPSConfigModalProps> = ({ isOpen, onClose 
       setLng(geofence.longitude || 80.1514);
       setRadius(geofence.radiusMeters || 150);
       setEnabled(geofence.enabled ?? true);
+      setAddress(geofence.address || 'Swarna Bharathi Institute of Science and Technology (SBIT)');
     }
   }, [isOpen, geofence]);
+
+  const fetchServerGeofence = async () => {
+    setIsRefreshingServer(true);
+    try {
+      const res = await fetch('/api/admin/geofence');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.geofence) {
+          setLat(Number(data.geofence.center_lat ?? 17.2472));
+          setLng(Number(data.geofence.center_lng ?? 80.1514));
+          setRadius(Number(data.geofence.radius_m ?? 150));
+          if (data.geofence.enabled !== undefined) setEnabled(data.geofence.enabled);
+          if (data.geofence.address) setAddress(data.geofence.address);
+        }
+      }
+    } catch (err) {
+      console.warn("Server geofence reload note:", err);
+    } finally {
+      setIsRefreshingServer(false);
+    }
+  };
 
   const captureAdminLocation = () => {
     setIsLocating(true);
@@ -43,7 +67,7 @@ export const GPSConfigModal: React.FC<GPSConfigModalProps> = ({ isOpen, onClose 
         setIsLocating(false);
       },
       (err) => {
-        alert(`Failed to capture location: ${err.message}. Preserving SBIT campus anchor.`);
+        alert(`Failed to capture location: ${err.message}. Preserving campus anchor.`);
         setIsLocating(false);
       },
       { enableHighAccuracy: true }
@@ -61,13 +85,14 @@ export const GPSConfigModal: React.FC<GPSConfigModalProps> = ({ isOpen, onClose 
       latitude: Number(lat),
       longitude: Number(lng),
       radiusMeters: Number(radius),
-      enabled
+      enabled,
+      address
     });
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
       onClose();
-    }, 1200);
+    }, 1400);
   };
 
   return (
@@ -171,40 +196,71 @@ export const GPSConfigModal: React.FC<GPSConfigModalProps> = ({ isOpen, onClose 
           />
         </div>
 
-        {/* Location Detection Button */}
-        <button
-          type="button"
-          onClick={captureAdminLocation}
-          disabled={isLocating}
-          className="w-full py-2.5 px-4 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs border border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700 transition flex items-center justify-center gap-2"
-        >
-          <Navigation className={`w-4 h-4 ${isLocating ? 'animate-spin' : ''}`} />
-          {isLocating ? 'Acquiring GPS Fix...' : 'Set Anchor to Current Administrator Location'}
-        </button>
+        {/* Campus Address / Title */}
+        <div>
+          <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-1.5">
+            College / Campus Name
+          </label>
+          <input
+            type="text"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder="e.g. Swarna Bharathi Institute of Science and Technology (SBIT)"
+            className="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs focus:border-slate-900 dark:focus:border-white focus:outline-none"
+          />
+        </div>
+
+        {/* Action helper buttons */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <button
+            type="button"
+            onClick={captureAdminLocation}
+            disabled={isLocating}
+            className="py-2.5 px-3 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs border border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700 transition flex items-center justify-center gap-2"
+          >
+            <Navigation className={`w-4 h-4 ${isLocating ? 'animate-spin' : ''}`} />
+            <span>{isLocating ? 'Acquiring GPS Fix...' : 'Use My Current Location'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={fetchServerGeofence}
+            disabled={isRefreshingServer}
+            className="py-2.5 px-3 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs border border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700 transition flex items-center justify-center gap-2"
+          >
+            <RefreshCw className={`w-4 h-4 ${isRefreshingServer ? 'animate-spin' : ''}`} />
+            <span>{isRefreshingServer ? 'Syncing Server...' : 'Reload Master from Server'}</span>
+          </button>
+        </div>
 
         {savedSuccess && (
-          <div className="p-3 rounded-lg bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-200 text-xs font-semibold flex items-center gap-2">
+          <div className="p-3.5 rounded-xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-200 text-xs font-semibold flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-teal-600 dark:text-teal-400 flex-shrink-0" />
-            <span>Geofence parameters updated and propagated to all live sessions!</span>
+            <span>Master college location saved to database and broadcast to all devices in real time!</span>
           </div>
         )}
 
         {/* Action Buttons */}
-        <div className="flex justify-end gap-3 pt-4 border-t border-slate-200 dark:border-slate-800">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2.5 rounded-lg text-xs font-semibold text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            className="px-5 py-2.5 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold text-xs uppercase tracking-wider shadow-sm hover:opacity-90 transition flex items-center gap-2"
-          >
-            <Save className="w-4 h-4" />
-            Save Configuration
-          </button>
+        <div className="flex items-center justify-between pt-4 border-t border-slate-200 dark:border-slate-800">
+          <p className="text-[11px] text-slate-400">
+            Coordinates will reflect on student phones, faculty dashboards & kiosks.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2.5 rounded-lg text-xs font-semibold text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-5 py-2.5 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold text-xs uppercase tracking-wider shadow-sm hover:opacity-90 transition flex items-center gap-2"
+            >
+              <Save className="w-4 h-4" />
+              Save Master Location
+            </button>
+          </div>
         </div>
 
       </form>

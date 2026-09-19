@@ -85,6 +85,8 @@ class GeofenceUpdatePayload(BaseModel):
     center_lat: float
     center_lng: float
     radius_m: int
+    enabled: Optional[bool] = True
+    address: Optional[str] = None
 
 class VerifyFaceDirectPayload(BaseModel):
     enrolledDescriptor: List[float]

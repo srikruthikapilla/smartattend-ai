@@ -24,6 +24,7 @@ try:
     limiter = Limiter(
         key_func=get_remote_address,
         storage_uri=REDIS_URL,
+        swallow_errors=True,
         default_limits=[]
     )
     RATE_LIMITING_ENABLED = True

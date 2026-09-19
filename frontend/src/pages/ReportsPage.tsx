@@ -110,7 +110,7 @@ export const ReportsPage: React.FC = () => {
             className="input-premium text-xs"
           >
             <option value="all">All Branches</option>
-            {['CSE', 'ECE', 'EEE', 'MECH', 'CIVIL', 'IT', 'AIML'].map(b => (
+            {['CSE', 'AI', 'DS'].map(b => (
               <option key={b} value={b}>{b} Department</option>
             ))}
           </select>

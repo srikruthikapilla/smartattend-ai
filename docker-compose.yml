@@ -42,7 +42,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
 
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
 
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       EDGE_API_KEY: ${EDGE_API_KEY:?EDGE_API_KEY is required}
@@ -58,7 +61,16 @@ services:
       BREVO_SMTP_LOGIN: ${BREVO_SMTP_LOGIN:-}
       BREVO_SMTP_KEY: ${BREVO_SMTP_KEY:-}
       BREVO_FROM_EMAIL: ${BREVO_FROM_EMAIL:-}
-      BREVO_FROM_NAME: ${BREVO_FROM_NAME:-Smart Attend}
+      BREVO_FROM_NAME: ${BREVO_FROM_NAME:-Smart Attend — SBIT}
+      BREVO_SMTP_USE_SSL: ${BREVO_SMTP_USE_SSL:-false}
+
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-}
+      SMTP_USE_SSL: ${SMTP_USE_SSL:-}
 
       DOCKER_CONTAINER: "true"
     # Backend is NOT exposed to host — access is via Nginx reverse proxy only

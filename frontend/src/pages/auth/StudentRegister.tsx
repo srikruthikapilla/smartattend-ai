@@ -149,12 +149,8 @@ export const StudentRegister: React.FC = () => {
                 className="w-full px-3 py-2.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white text-xs focus:outline-none"
               >
                 <option value="CSE">CSE</option>
-                <option value="ECE">ECE</option>
-                <option value="EEE">EEE</option>
-                <option value="MECH">MECH</option>
-                <option value="CIVIL">CIVIL</option>
-                <option value="IT">IT</option>
-                <option value="AIML">AIML</option>
+                <option value="AI">AI</option>
+                <option value="DS">DS</option>
               </select>
             </div>
 

@@ -1,20 +1,16 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import QRCode from "qrcode";
 import { useAttendance } from "../../context/AttendanceContext";
 import {
   RefreshCw,
   Clock,
-  Users,
   ShieldCheck,
   Maximize2,
   Minimize2,
-  Sparkles,
-  MapPin,
   Copy,
   Check,
   ExternalLink,
-  QrCode,
-  Smartphone
+  MapPin
 } from "lucide-react";
 
 export const QRGenerator: React.FC = () => {
@@ -27,17 +23,18 @@ export const QRGenerator: React.FC = () => {
     geofence,
   } = useAttendance();
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const kioskCanvasRef = useRef<HTMLCanvasElement>(null);
   const [isKioskMode, setIsKioskMode] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
+  const [standardQrUrl, setStandardQrUrl] = useState<string>("");
+  const [kioskQrUrl, setKioskQrUrl] = useState<string>("");
 
   // Compute full clickable Check-in URL
-  const checkinUrl = activeSession
-    ? (qrToken && qrToken.startsWith("http")
-      ? qrToken
-      : `${window.location.origin}/checkin?token=${encodeURIComponent(qrToken || activeSession.sessionId || "live")}`)
-    : "";
+  const checkinUrl = useMemo(() => {
+    if (!activeSession) return "";
+    if (qrToken && qrToken.startsWith("http")) return qrToken;
+    const tokenParam = encodeURIComponent(qrToken || activeSession.sessionId || "live");
+    return `${window.location.origin}/checkin?token=${tokenParam}`;
+  }, [activeSession, qrToken]);
 
   const handleCopyLink = () => {
     if (!checkinUrl) return;
@@ -46,47 +43,61 @@ export const QRGenerator: React.FC = () => {
     setTimeout(() => setCopied(false), 2500);
   };
 
-  // Render Standard QR Canvas (responsive ~240px)
+  // Close kiosk on Escape key
   useEffect(() => {
-    if (!canvasRef.current || !checkinUrl) return;
-
-    QRCode.toCanvas(
-      canvasRef.current,
-      checkinUrl,
-      {
-        width: 220,
-        margin: 1.5,
-        color: {
-          dark: "#0f172a",
-          light: "#ffffff",
-        },
-      },
-      (err) => {
-        if (err) console.error("QR Canvas error:", err);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isKioskMode) {
+        setIsKioskMode(false);
       }
-    );
-  }, [checkinUrl]);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isKioskMode]);
 
-  // Render Kiosk Mode Fullscreen QR Canvas (~420px)
+  // Pre-generate flicker-free QR image Data URLs whenever checkinUrl changes
   useEffect(() => {
-    if (isKioskMode && kioskCanvasRef.current && checkinUrl) {
-      QRCode.toCanvas(
-        kioskCanvasRef.current,
-        checkinUrl,
-        {
-          width: 380,
-          margin: 2,
-          color: {
-            dark: "#0f172a",
-            light: "#ffffff",
-          },
-        },
-        (err) => {
-          if (err) console.error("Kiosk QR Canvas error:", err);
-        }
-      );
+    if (!checkinUrl) {
+      setStandardQrUrl("");
+      setKioskQrUrl("");
+      return;
     }
-  }, [checkinUrl, isKioskMode]);
+
+    let isMounted = true;
+
+    // Compact standard widget (~240px)
+    QRCode.toDataURL(checkinUrl, {
+      width: 240,
+      margin: 1.5,
+      color: {
+        dark: "#0f172a",
+        light: "#ffffff",
+      },
+      errorCorrectionLevel: "M",
+    })
+      .then((url) => {
+        if (isMounted) setStandardQrUrl(url);
+      })
+      .catch((err) => console.error("Standard QR generation error:", err));
+
+    // Projector Kiosk high-resolution (~480px)
+    QRCode.toDataURL(checkinUrl, {
+      width: 480,
+      margin: 2,
+      color: {
+        dark: "#0f172a",
+        light: "#ffffff",
+      },
+      errorCorrectionLevel: "M",
+    })
+      .then((url) => {
+        if (isMounted) setKioskQrUrl(url);
+      })
+      .catch((err) => console.error("Kiosk QR generation error:", err));
+
+    return () => {
+      isMounted = false;
+    };
+  }, [checkinUrl]);
 
   if (!activeSession) {
     return (
@@ -98,7 +109,7 @@ export const QRGenerator: React.FC = () => {
           No Active Attendance Session
         </h3>
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-          Start an Innovation Centre session to display the live dynamic QR code and check-in portal.
+          Start an attendance session to display the live dynamic QR code and check-in portal.
         </p>
       </div>
     );
@@ -109,26 +120,26 @@ export const QRGenerator: React.FC = () => {
   );
   const presentCount = sessionRecords.filter((r) => r.status === "present").length;
   const lateCount = sessionRecords.filter((r) => r.status === "late").length;
-  const rotationProgress = (rotationCountdown / 60) * 100;
+  const rotationProgress = Math.max(0, Math.min(100, (rotationCountdown / 60) * 100));
   const mins = Math.floor(sessionCountdown / 60);
   const secs = sessionCountdown % 60;
 
   return (
     <div className="w-full flex flex-col items-center">
-      {/* Fullscreen Projector Kiosk Modal */}
+      {/* Fullscreen Projector Kiosk Modal (Solid dark background, flicker-free image layer) */}
       {isKioskMode && (
-        <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-2xl p-6 sm:p-10 flex flex-col justify-between items-center text-white overflow-hidden animate-fadeIn">
+        <div className="fixed inset-0 z-50 bg-slate-950 p-6 sm:p-10 flex flex-col justify-between items-center text-white overflow-hidden select-none">
           {/* Top Bar */}
           <div className="w-full max-w-5xl flex justify-between items-center border-b border-slate-800 pb-4">
             <div>
               <span className="text-[11px] font-extrabold uppercase tracking-widest text-teal-400 font-heading">
-                SBIT INNOVATION CENTRE • LIVE PROJECTOR KIOSK
+                CAMPUS LIVE PROJECTOR KIOSK
               </span>
               <h2 className="text-2xl sm:text-3xl font-extrabold text-white mt-0.5 font-heading">
-                {activeSession.sessionTitle || "Innovation Centre Prototype Session"}
+                {activeSession.sessionTitle || "Classroom Lecture Session"}
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Faculty: {activeSession.facultyName || "Faculty Member"} • Room: {activeSession.room || "Innovation Centre"}
+                Faculty: {activeSession.facultyName || "Faculty Member"} • Room: {activeSession.room || "Campus Hall"}
               </p>
             </div>
             <div className="flex items-center gap-4">
@@ -144,15 +155,29 @@ export const QRGenerator: React.FC = () => {
                 className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition flex items-center gap-1.5"
               >
                 <Minimize2 className="w-4 h-4" />
-                <span className="hidden sm:inline">Exit Kiosk</span>
+                <span className="hidden sm:inline">Exit Kiosk (Esc)</span>
               </button>
             </div>
           </div>
 
-          {/* Center Large QR */}
+          {/* Center Large QR (Hardware-accelerated, zero-flicker static image) */}
           <div className="flex flex-col items-center justify-center space-y-4 my-auto">
-            <div className="p-4 sm:p-6 bg-white rounded-3xl shadow-2xl shadow-teal-500/20 border-4 border-teal-500/40">
-              <canvas ref={kioskCanvasRef} className="max-w-full h-auto rounded-xl" />
+            <div
+              className="p-4 sm:p-6 bg-white rounded-3xl shadow-2xl shadow-teal-500/20 border-4 border-teal-500/40 transition-none"
+              style={{ transform: "translateZ(0)", willChange: "transform" }}
+            >
+              {kioskQrUrl ? (
+                <img
+                  src={kioskQrUrl}
+                  alt="Live Attendance QR Code"
+                  className="w-[280px] sm:w-[380px] h-[280px] sm:h-[380px] rounded-xl object-contain block select-none pointer-events-none"
+                  style={{ imageRendering: "pixelated" }}
+                />
+              ) : (
+                <div className="w-[280px] sm:w-[380px] h-[280px] sm:h-[380px] flex items-center justify-center">
+                  <RefreshCw className="w-10 h-10 text-teal-500 animate-spin" />
+                </div>
+              )}
             </div>
 
             {/* Direct Link Banner */}
@@ -186,7 +211,7 @@ export const QRGenerator: React.FC = () => {
             <div className="w-full max-w-sm space-y-1.5">
               <div className="flex justify-between text-xs text-slate-300 font-bold">
                 <span className="flex items-center gap-1 text-teal-400 font-mono">
-                  <RefreshCw className="w-3 h-3 animate-spin" /> Dynamic Refresh
+                  <RefreshCw className="w-3 h-3 text-teal-400" /> Dynamic Rotation
                 </span>
                 <span className="font-mono">{rotationCountdown}s remaining</span>
               </div>
@@ -221,7 +246,7 @@ export const QRGenerator: React.FC = () => {
               </div>
             </div>
             <p className="text-slate-400 hidden sm:block">
-              Scan with Google Lens / Phone Camera to open the AI facial recognition check-in page.
+              Scan with Phone Camera or Google Lens to open the student facial check-in portal.
             </p>
           </div>
         </div>
@@ -232,7 +257,7 @@ export const QRGenerator: React.FC = () => {
         {/* Header Controls */}
         <div className="w-full flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-teal-500/10 border border-teal-500/20 text-teal-700 dark:text-teal-400 text-[11px] font-bold">
-            <RefreshCw className="w-3 h-3 animate-spin text-teal-600 dark:text-teal-400 flex-shrink-0" />
+            <RefreshCw className="w-3 h-3 text-teal-600 dark:text-teal-400 flex-shrink-0" />
             <span>Dynamic QR ({rotationCountdown}s)</span>
           </div>
 
@@ -247,8 +272,22 @@ export const QRGenerator: React.FC = () => {
         </div>
 
         {/* QR Code Canvas */}
-        <div className="p-3 bg-white rounded-2xl shadow-md border border-slate-200 dark:border-slate-700 flex items-center justify-center">
-          <canvas ref={canvasRef} className="rounded-lg max-w-full h-auto block" />
+        <div
+          className="p-3 bg-white rounded-2xl shadow-md border border-slate-200 dark:border-slate-700 flex items-center justify-center"
+          style={{ transform: "translateZ(0)" }}
+        >
+          {standardQrUrl ? (
+            <img
+              src={standardQrUrl}
+              alt="Attendance QR Code"
+              className="w-[220px] h-[220px] rounded-lg object-contain block select-none pointer-events-none"
+              style={{ imageRendering: "pixelated" }}
+            />
+          ) : (
+            <div className="w-[220px] h-[220px] flex items-center justify-center">
+              <RefreshCw className="w-6 h-6 text-teal-500 animate-spin" />
+            </div>
+          )}
         </div>
 
         {/* Rotation Countdown Progress */}

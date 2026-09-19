@@ -22,6 +22,7 @@ from app.models.db_models import AttendanceSession
 from app.database import get_db
 from app.dependencies.auth import require_role
 from app.routes.auth import _rate_limit
+from app.utils.geofence import current_geofence
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +87,9 @@ def start_qr_session(
         "room": payload.room or "Innovation Centre Lab",
         "token": token,
         "raw_token": raw_token_id,
-        "faculty_lat": payload.latitude or 17.2472,
-        "faculty_lng": payload.longitude or 80.1514,
-        "radius_meters": payload.radiusMeters or 500,
+        "faculty_lat": payload.latitude or current_geofence.get("center_lat", 17.2472),
+        "faculty_lng": payload.longitude or current_geofence.get("center_lng", 80.1514),
+        "radius_meters": payload.radiusMeters or current_geofence.get("radius_m", 150),
         "expiresAt": int(time.time() * 1000) + (120 * 60 * 1000),  # 2 hours
         "createdAt": now_dt.isoformat()
     }
@@ -113,10 +114,10 @@ def start_qr_session(
             end_time=end_dt,
             status="active",
             qr_token=raw_token_id,
-            radius_meters=payload.radiusMeters or 150,
+            radius_meters=payload.radiusMeters or current_geofence.get("radius_m", 150),
             geofence={
-                "lat": payload.latitude or 17.2472,
-                "lng": payload.longitude or 80.1514
+                "lat": payload.latitude or current_geofence.get("center_lat", 17.2472),
+                "lng": payload.longitude or current_geofence.get("center_lng", 80.1514)
             }
         )
         db.add(new_sess)

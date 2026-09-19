@@ -73,18 +73,95 @@ if IS_PRODUCTION:
         if raw_pass.strip().lower() in _INSECURE_DB_PASSWORDS:
             raise RuntimeError("CRITICAL SECURITY ERROR: Insecure or default POSTGRES_PASSWORD cannot be used in production.")
 
-# Redis configuration for OTP with TTL
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-if not _is_running_in_container() and "@redis:" in REDIS_URL:
-    REDIS_URL = REDIS_URL.replace("@redis:", "@localhost:")
+# ---------------------------------------------------------------------------
+# Redis configuration (supports REDIS_URL, REDIS_URI, or standalone variables)
+# ---------------------------------------------------------------------------
+_RAW_REDIS_URL = os.getenv("REDIS_URL") or os.getenv("REDIS_URI")
+if not _RAW_REDIS_URL:
+    redis_host = os.getenv("REDIS_HOST", "redis" if _is_running_in_container() else "localhost")
+    redis_port = os.getenv("REDIS_PORT", "6379")
+    redis_password = os.getenv("REDIS_PASSWORD") or os.getenv("REDIS_PASS") or ""
+    redis_user = os.getenv("REDIS_USER") or os.getenv("REDIS_USERNAME") or ""
+    redis_db = os.getenv("REDIS_DB", "0")
+    redis_tls = os.getenv("REDIS_TLS", "false").lower() in ("true", "1", "yes")
+    scheme = "rediss" if redis_tls else "redis"
 
-# Brevo (Sendinblue) SMTP configuration
-BREVO_SMTP_SERVER = os.getenv("BREVO_SMTP_SERVER", "smtp-relay.brevo.com")
-BREVO_SMTP_PORT = int(os.getenv("BREVO_SMTP_PORT", "587"))
-BREVO_SMTP_LOGIN = os.getenv("BREVO_SMTP_LOGIN", "")
-BREVO_SMTP_KEY = os.getenv("BREVO_SMTP_KEY", "")
-BREVO_FROM_EMAIL = os.getenv("BREVO_FROM_EMAIL", "")
-BREVO_FROM_NAME = os.getenv("BREVO_FROM_NAME", "Smart Attend — SBIT")
+    if redis_password:
+        from urllib.parse import quote
+        auth = f"{quote(redis_user)}:{quote(redis_password)}@" if redis_user else f":{quote(redis_password)}@"
+    else:
+        auth = ""
+
+    REDIS_URL = f"{scheme}://{auth}{redis_host}:{redis_port}/{redis_db}"
+else:
+    REDIS_URL = _RAW_REDIS_URL
+    # If REDIS_PASSWORD was provided as a separate environment variable in Coolify
+    # and is not already embedded in REDIS_URL, inject it
+    redis_password = os.getenv("REDIS_PASSWORD") or os.getenv("REDIS_PASS")
+    if redis_password and "@" not in REDIS_URL:
+        from urllib.parse import quote
+        redis_user = os.getenv("REDIS_USER") or os.getenv("REDIS_USERNAME") or ""
+        auth = f"{quote(redis_user)}:{quote(redis_password)}@" if redis_user else f":{quote(redis_password)}@"
+        if "://" in REDIS_URL:
+            scheme, rest = REDIS_URL.split("://", 1)
+            REDIS_URL = f"{scheme}://{auth}{rest}"
+        else:
+            REDIS_URL = f"redis://{auth}{REDIS_URL}"
+
+# If running locally outside docker container, translate internal container host to localhost
+if not _is_running_in_container():
+    if "://redis:" in REDIS_URL:
+        REDIS_URL = REDIS_URL.replace("://redis:", "://localhost:")
+    elif "@redis:" in REDIS_URL:
+        REDIS_URL = REDIS_URL.replace("@redis:", "@localhost:")
+
+# ---------------------------------------------------------------------------
+# SMTP configuration (supports Brevo or standard SMTP variables in Coolify)
+# ---------------------------------------------------------------------------
+BREVO_SMTP_SERVER = (
+    os.getenv("BREVO_SMTP_SERVER")
+    or os.getenv("SMTP_HOST")
+    or os.getenv("SMTP_SERVER")
+    or "smtp-relay.brevo.com"
+)
+BREVO_SMTP_PORT = int(
+    os.getenv("BREVO_SMTP_PORT")
+    or os.getenv("SMTP_PORT")
+    or "587"
+)
+BREVO_SMTP_LOGIN = (
+    os.getenv("BREVO_SMTP_LOGIN")
+    or os.getenv("SMTP_USER")
+    or os.getenv("SMTP_USERNAME")
+    or os.getenv("SMTP_LOGIN")
+    or ""
+)
+BREVO_SMTP_KEY = (
+    os.getenv("BREVO_SMTP_KEY")
+    or os.getenv("SMTP_PASSWORD")
+    or os.getenv("SMTP_PASS")
+    or os.getenv("SMTP_KEY")
+    or ""
+)
+BREVO_FROM_EMAIL = (
+    os.getenv("BREVO_FROM_EMAIL")
+    or os.getenv("SMTP_FROM_EMAIL")
+    or os.getenv("MAIL_FROM")
+    or os.getenv("SMTP_FROM")
+    or ""
+)
+BREVO_FROM_NAME = (
+    os.getenv("BREVO_FROM_NAME")
+    or os.getenv("SMTP_FROM_NAME")
+    or os.getenv("MAIL_FROM_NAME")
+    or "Smart Attend — SBIT"
+)
+BREVO_SMTP_USE_SSL = (
+    os.getenv("BREVO_SMTP_USE_SSL", "").lower() in ("true", "1", "yes")
+    or os.getenv("SMTP_USE_SSL", "").lower() in ("true", "1", "yes")
+    or os.getenv("SMTP_SECURE", "").lower() in ("true", "1", "yes", "ssl")
+    or BREVO_SMTP_PORT == 465
+)
 
 # ---------------------------------------------------------------------------
 # Security Secrets — MUST be overridden in production

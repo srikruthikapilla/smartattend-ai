@@ -19,12 +19,8 @@ export const initialActiveSession: QRSession | null = null;
 export const generateSeedAttendanceRecords = (): AttendanceRecord[] => {
   const branches = [
     { code: 'CSE', name: 'Computer Science & Engineering', targetRate: 0.94, prefix: '22SBIT05' },
-    { code: 'AIML', name: 'Artificial Intelligence & ML', targetRate: 0.92, prefix: '22SBIT66' },
-    { code: 'ECE', name: 'Electronics & Communication', targetRate: 0.89, prefix: '22SBIT04' },
-    { code: 'IT', name: 'Information Technology', targetRate: 0.86, prefix: '22SBIT12' },
-    { code: 'EEE', name: 'Electrical & Electronics', targetRate: 0.84, prefix: '22SBIT02' },
-    { code: 'CIVIL', name: 'Civil Engineering', targetRate: 0.81, prefix: '22SBIT01' },
-    { code: 'MECH', name: 'Mechanical Engineering', targetRate: 0.78, prefix: '22SBIT03' }
+    { code: 'AI', name: 'Artificial Intelligence & ML', targetRate: 0.92, prefix: '22SBIT66' },
+    { code: 'DS', name: 'Data Science', targetRate: 0.89, prefix: '22SBIT67' }
   ];
 
   const studentPool: Record<string, string[]> = {
@@ -32,40 +28,20 @@ export const generateSeedAttendanceRecords = (): AttendanceRecord[] => {
       "K. Sai Praneeth", "V. Ananya", "M. Rahul Kumar", "P. Sneha Reddy", "T. Akhil Varma",
       "S. Harshitha", "B. Tarun Reddy", "N. Divya", "D. Rohit", "K. Bhavana"
     ],
-    AIML: [
+    AI: [
       "A. Sri Kruthika", "M. Muneeb Bhai", "P. Varun Teja", "K. Jahnavi", "S. Niharika",
       "R. Chetan Kumar", "V. Sahithi", "T. Pranav", "G. Likhitha", "B. Surya Prakash"
     ],
-    ECE: [
+    DS: [
       "R. Vikram", "G. Meghana", "A. Karthik", "P. Pooja", "K. Srikanth",
       "V. Lavanya", "J. Mahesh", "T. Swathi", "M. Sandeep", "S. Anusha"
-    ],
-    IT: [
-      "D. Srinidhi", "K. Hemanth", "V. Tejaswini", "M. Vamsi Krishna", "P. Chandana",
-      "S. Abhinav", "R. Manasa", "G. Sravan", "T. Ruchitha", "N. Prashanth"
-    ],
-    EEE: [
-      "B. Venkatesh", "K. Mounika", "P. Suresh", "R. Deepika", "V. Naveen",
-      "S. Keerthi", "N. Harish", "T. Pavani", "G. Rakesh", "A. Sushma"
-    ],
-    CIVIL: [
-      "S. Bhanu Prasad", "K. Jyothi", "R. Shiva Kumar", "P. Sunitha", "M. Jagadeesh",
-      "V. Ramya", "T. Goutham", "G. Shirisha", "A. Manoj", "B. Sandhya"
-    ],
-    MECH: [
-      "P. Rakesh Kumar", "M. Avinash", "K. Praveen", "V. Sai Teja", "S. Manikanta",
-      "G. Vinay", "T. Yashwanth", "B. Ajay", "N. Kalyan", "D. Charan"
     ]
   };
 
   const sessionsPerBranch: Record<string, string[]> = {
     CSE: ["Machine Learning & Edge AI", "Distributed Cloud Systems", "Algorithm Engineering"],
-    AIML: ["Deep Neural Networks", "Computer Vision Systems", "Natural Language Processing"],
-    ECE: ["VLSI Design & Architecture", "Digital Signal Processing", "Microcontrollers & IoT"],
-    IT: ["Full Stack Web Architectures", "Cyber Security & Cryptography", "DevOps & Cloud"],
-    EEE: ["Power Systems & Smart Grids", "Control Systems Engineering", "Renewable Energy Tech"],
-    CIVIL: ["Structural Analysis & Design", "Geotechnical Engineering", "Environmental Engineering"],
-    MECH: ["Thermodynamics & Heat Transfer", "Robotics & Automation", "Fluid Mechanics & Turbo"]
+    AI: ["Deep Neural Networks", "Computer Vision Systems", "Natural Language Processing"],
+    DS: ["Big Data Analytics", "Data Mining & Warehousing", "Statistical Modeling & Viz"]
   };
 
   const records: AttendanceRecord[] = [];

@@ -62,6 +62,7 @@ export interface GeofenceConfig {
   lng?: number;
   radiusMeters: number;
   enabled?: boolean;
+  address?: string;
 }
 
 export interface AuditLog {

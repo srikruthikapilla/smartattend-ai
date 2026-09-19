@@ -40,7 +40,7 @@ export const AnalyticsPage: React.FC = () => {
   const rate = total > 0 ? Math.round(((present + late) / total) * 100) : 0;
 
   // Dynamically compute Highest & Lowest Performing Branches across all records
-  const branches = ['CSE', 'AIML', 'ECE', 'IT', 'EEE', 'CIVIL', 'MECH'];
+  const branches = ['CSE', 'AI', 'DS'];
   const branchStats = branches.map(b => {
     const bRecs = attendanceRecords.filter(r => r.branch === b);
     const bTotal = bRecs.length;
@@ -113,7 +113,7 @@ export const AnalyticsPage: React.FC = () => {
             className="px-3.5 py-2 rounded-xl bg-white dark:bg-surface-card-dark border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white text-xs font-medium focus:outline-none focus:border-accent font-heading"
           >
             <option value="all">All Branches</option>
-            {['CSE', 'AIML', 'ECE', 'IT', 'EEE', 'CIVIL', 'MECH'].map(b => (
+            {['CSE', 'AI', 'DS'].map(b => (
               <option key={b} value={b}>{b} Department</option>
             ))}
           </select>

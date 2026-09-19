@@ -1,6 +1,6 @@
 import time
 import logging
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +29,39 @@ def get_redis_client():
     try:
         import redis
         from app.config import REDIS_URL
-        client = redis.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=2)
+        import urllib.parse
+
+        ssl_kwargs = {}
+        if REDIS_URL.startswith("rediss://"):
+            import ssl
+            ssl_kwargs["ssl_cert_reqs"] = None
+
+        client = redis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=5,
+            retry_on_timeout=True,
+            **ssl_kwargs
+        )
         client.ping()
         _redis_client = client
-        logger.info(f"[Redis] Connected successfully to {REDIS_URL.split('@')[-1] if '@' in REDIS_URL else REDIS_URL}")
+
+        # Log masked URL (hides credentials)
+        try:
+            parsed = urllib.parse.urlparse(REDIS_URL)
+            if parsed.password:
+                masked_netloc = parsed.netloc.replace(parsed.password, "******")
+                masked_endpoint = urllib.parse.urlunparse(parsed._replace(netloc=masked_netloc))
+            else:
+                masked_endpoint = REDIS_URL
+        except Exception:
+            masked_endpoint = "redis://[configured]"
+
+        logger.info(f"[Redis] Connected successfully to {masked_endpoint}")
         return _redis_client
     except Exception as e:
-        logger.warning(f"[Redis] Unable to connect to Redis ({e}). Using in-memory OTP fallback.")
+        logger.warning(f"[Redis] Unable to connect to Redis ({e}). Using in-memory fallback cache.")
         # Reset to None (not False) so the next call retries after Redis recovers
         _redis_client = None
         return None
@@ -100,3 +126,55 @@ def delete_otp(email: str) -> bool:
     if clean_email in _memory_otp_cache:
         del _memory_otp_cache[clean_email]
     return True
+
+
+def test_redis_connection() -> Dict[str, Any]:
+    """
+    Test active Redis connectivity and return latency and status details.
+    Safely masks passwords and reports in-memory fallback status if disconnected.
+    """
+    from app.config import REDIS_URL
+    import urllib.parse
+
+    masked_endpoint = REDIS_URL
+    try:
+        parsed = urllib.parse.urlparse(REDIS_URL)
+        if parsed.password:
+            masked_netloc = parsed.netloc.replace(parsed.password, "******")
+            masked_endpoint = urllib.parse.urlunparse(parsed._replace(netloc=masked_netloc))
+    except Exception:
+        masked_endpoint = "redis://[configured]"
+
+    t0 = time.perf_counter()
+    try:
+        client = get_redis_client()
+        if client:
+            client.ping()
+            latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+            return {
+                "connected": True,
+                "status": "connected",
+                "endpoint": masked_endpoint,
+                "latency_ms": latency_ms,
+                "memory_fallback_active": False,
+                "active_memory_keys": len(_memory_otp_cache)
+            }
+    except Exception as e:
+        return {
+            "connected": False,
+            "status": "disconnected",
+            "endpoint": masked_endpoint,
+            "error": str(e),
+            "memory_fallback_active": True,
+            "active_memory_keys": len(_memory_otp_cache)
+        }
+
+    return {
+        "connected": False,
+        "status": "disconnected",
+        "endpoint": masked_endpoint,
+        "error": "Redis client returned None (in-memory mode)",
+        "memory_fallback_active": True,
+        "active_memory_keys": len(_memory_otp_cache)
+    }
+

@@ -38,7 +38,7 @@ export const FacultyDashboard: React.FC = () => {
       sessionTitle: `${currentUser.department || "Machine Learning"} Lecture Session`,
       facultyId: currentUser.uid,
       facultyName: currentUser.name || "Faculty Member",
-      branch: currentUser.assignedBranch || "CSM",
+      branch: currentUser.assignedBranch || "CSE",
       section: currentUser.assignedSections?.[0] || "A",
       year: 3,
       room: "Innovation Lab 301",
@@ -227,7 +227,7 @@ export const FacultyDashboard: React.FC = () => {
         <div className="lg:col-span-7 flex flex-col gap-4">
           <LiveAttendanceRoster
             title="Real-Time Student Attendance Roster"
-            defaultBranch={activeSession?.branch || currentUser?.assignedBranch || "CSM"}
+            defaultBranch={activeSession?.branch || currentUser?.assignedBranch || "CSE"}
             defaultSection={activeSession?.section || "A"}
             showSectionFilter={true}
           />
@@ -239,7 +239,7 @@ export const FacultyDashboard: React.FC = () => {
       <InsertStudentModal
         isOpen={isInsertModalOpen}
         onClose={() => setIsInsertModalOpen(false)}
-        defaultBranch={currentUser?.assignedBranch || 'CSM'}
+        defaultBranch={currentUser?.assignedBranch || 'CSE'}
         defaultSection={assignedSections[0]?.split('-')[1] || 'A'}
       />
 

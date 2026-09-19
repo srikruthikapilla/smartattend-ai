@@ -13,7 +13,7 @@ export const EditSessionModal: React.FC<EditSessionModalProps> = ({ isOpen, onCl
 
   const [sessionTitle, setSessionTitle] = useState('');
   const [room, setRoom] = useState('');
-  const [branch, setBranch] = useState('CSM');
+  const [branch, setBranch] = useState('CSE');
   const [section, setSection] = useState('A');
   const [year, setYear] = useState(3);
   const [radiusMeters, setRadiusMeters] = useState(150);
@@ -23,7 +23,7 @@ export const EditSessionModal: React.FC<EditSessionModalProps> = ({ isOpen, onCl
     if (activeSession) {
       setSessionTitle(activeSession.sessionTitle || 'Campus Lecture Session');
       setRoom(activeSession.room || 'Innovation Lab');
-      setBranch(activeSession.branch || 'CSM');
+      setBranch(activeSession.branch || 'CSE');
       setSection(activeSession.section || 'A');
       setYear(activeSession.year || 3);
       setRadiusMeters(activeSession.radiusMeters || 150);
@@ -103,14 +103,9 @@ export const EditSessionModal: React.FC<EditSessionModalProps> = ({ isOpen, onCl
               onChange={(e) => setBranch(e.target.value)}
               className="w-full px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs font-semibold focus:ring-2 focus:ring-blue-500"
             >
-              <option value="CSM">CSM</option>
               <option value="CSE">CSE</option>
-              <option value="ECE">ECE</option>
-              <option value="EEE">EEE</option>
-              <option value="MECH">MECH</option>
-              <option value="CIVIL">CIVIL</option>
-              <option value="IT">IT</option>
-              <option value="AIML">AIML</option>
+              <option value="AI">AI</option>
+              <option value="DS">DS</option>
             </select>
           </div>
 

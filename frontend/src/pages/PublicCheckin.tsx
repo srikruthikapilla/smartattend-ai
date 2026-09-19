@@ -856,7 +856,7 @@ export const PublicCheckin: React.FC = () => {
                       <span className="font-bold text-slate-800 dark:text-slate-200">{sessionData.sessionTitle || "Classroom Session"}</span>
                     </div>
                     <span className="font-mono text-teal-600 dark:text-teal-400 font-bold">
-                      {sessionData.branch || "CSM"} • Sec {sessionData.section || "A"}
+                      {sessionData.branch || "CSE"} • Sec {sessionData.section || "A"}
                     </span>
                   </div>
                 )}

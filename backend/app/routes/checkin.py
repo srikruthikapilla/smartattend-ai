@@ -925,8 +925,8 @@ async def verify_student_checkin(
             session_lat,
             session_lng
         )
-        campus_lat = geofence_cfg.center_lat if geofence_cfg else 17.2472
-        campus_lng = geofence_cfg.center_lng if geofence_cfg else 80.1514
+        campus_lat = geofence_cfg.center_lat if geofence_cfg else current_geofence.get("center_lat", 17.2472)
+        campus_lng = geofence_cfg.center_lng if geofence_cfg else current_geofence.get("center_lng", 80.1514)
         campus_dist_m = calculate_haversine_distance(
             payload.lat,
             payload.lng,
