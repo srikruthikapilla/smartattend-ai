@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useAttendance } from '../../context/AttendanceContext';
 import {
@@ -35,14 +35,18 @@ export const LiveAttendanceRoster: React.FC<LiveAttendanceRosterProps> = ({
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'PRESENT' | 'ABSENT' | 'LATE'>('ALL');
-  const [selectedBranch, setSelectedBranch] = useState<string>(
-    activeSession?.branch || defaultBranch
-  );
-  const [selectedSection, setSelectedSection] = useState<string>(
-    activeSession?.section || defaultSection
-  );
+  const [selectedBranch, setSelectedBranch] = useState<string>(defaultBranch || 'ALL');
+  const [selectedSection, setSelectedSection] = useState<string>(defaultSection || 'ALL');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lookupStudentHt, setLookupStudentHt] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (defaultBranch) setSelectedBranch(defaultBranch);
+  }, [defaultBranch]);
+
+  useEffect(() => {
+    if (defaultSection) setSelectedSection(defaultSection);
+  }, [defaultSection]);
 
   // All enrolled students (fallback to approvedStudents if users isn't loaded yet)
   const enrolledStudents = useMemo(() => {
@@ -126,27 +130,62 @@ export const LiveAttendanceRoster: React.FC<LiveAttendanceRosterProps> = ({
   // Extract unique branches and sections available among all students and records
   const availableBranches = useMemo(() => {
     const set = new Set<string>();
-    rosterData.forEach(r => { if (r.student.branch) set.add(r.student.branch); });
-    return Array.from(set);
+    rosterData.forEach(r => {
+      const b = (r.student.branch || '').trim().toUpperCase();
+      if (b) set.add(b);
+    });
+    return Array.from(set).sort();
   }, [rosterData]);
 
   const availableSections = useMemo(() => {
     const set = new Set<string>();
-    rosterData.forEach(r => { if (r.student.section) set.add(r.student.section); });
-    return Array.from(set);
+    rosterData.forEach(r => {
+      const s = (r.student.section || '').trim().toUpperCase();
+      if (s) set.add(s);
+    });
+    return Array.from(set).sort();
   }, [rosterData]);
+
+  // Fallback to 'ALL' if the selected branch/section does not exist in the loaded data
+  useEffect(() => {
+    if (selectedBranch !== 'ALL' && availableBranches.length > 0) {
+      const exists = availableBranches.some(b => b.toUpperCase() === selectedBranch.toUpperCase());
+      if (!exists) {
+        setSelectedBranch('ALL');
+      }
+    }
+  }, [availableBranches, selectedBranch]);
+
+  useEffect(() => {
+    if (selectedSection !== 'ALL' && availableSections.length > 0) {
+      const exists = availableSections.some(s => s.toUpperCase() === selectedSection.toUpperCase());
+      if (!exists) {
+        setSelectedSection('ALL');
+      }
+    }
+  }, [availableSections, selectedSection]);
 
   // Apply filters
   const filteredRoster = useMemo(() => {
     return rosterData.filter(({ student, status }) => {
-      // Branch filter
-      if (selectedBranch !== 'ALL' && student.branch !== selectedBranch) {
-        return false;
+      // Branch filter: only filter if an explicit specific branch is selected
+      if (selectedBranch && selectedBranch !== 'ALL') {
+        const studentBranch = (student.branch || '').trim().toUpperCase();
+        const targetBranch = selectedBranch.trim().toUpperCase();
+        if (studentBranch !== targetBranch && !studentBranch.includes(targetBranch) && !targetBranch.includes(studentBranch)) {
+          return false;
+        }
       }
-      // Section filter
-      if (selectedSection !== 'ALL' && student.section !== selectedSection) {
-        return false;
+
+      // Section filter: only filter if an explicit specific section is selected
+      if (selectedSection && selectedSection !== 'ALL') {
+        const studentSec = (student.section || '').trim().toUpperCase();
+        const targetSec = selectedSection.trim().toUpperCase();
+        if (studentSec !== targetSec) {
+          return false;
+        }
       }
+
       // Status filter
       if (statusFilter === 'PRESENT' && status !== 'present') return false;
       if (statusFilter === 'ABSENT' && status !== 'absent') return false;
@@ -154,11 +193,13 @@ export const LiveAttendanceRoster: React.FC<LiveAttendanceRosterProps> = ({
 
       // Search query
       if (search.trim()) {
-        const q = search.toLowerCase();
-        const matchName = student.name.toLowerCase().includes(q);
-        const matchHT = student.hallTicketNo ? student.hallTicketNo.toLowerCase().includes(q) : false;
-        const matchBranch = student.branch ? student.branch.toLowerCase().includes(q) : false;
-        return matchName || matchHT || matchBranch;
+        const q = search.toLowerCase().trim();
+        const matchName = (student.name || '').toLowerCase().includes(q);
+        const matchHT = (student.hallTicketNo || '').toLowerCase().includes(q);
+        const matchEmail = (student.email || '').toLowerCase().includes(q);
+        const matchBranch = (student.branch || '').toLowerCase().includes(q);
+        const matchSec = (student.section || '').toLowerCase().includes(q);
+        return matchName || matchHT || matchEmail || matchBranch || matchSec;
       }
 
       return true;
@@ -436,6 +477,9 @@ export const LiveAttendanceRoster: React.FC<LiveAttendanceRosterProps> = ({
                   {availableBranches.map(b => (
                     <option key={b} value={b}>{b} Department</option>
                   ))}
+                  {selectedBranch !== 'ALL' && !availableBranches.includes(selectedBranch) && (
+                    <option value={selectedBranch}>{selectedBranch} Department</option>
+                  )}
                 </select>
 
                 <select
@@ -447,6 +491,9 @@ export const LiveAttendanceRoster: React.FC<LiveAttendanceRosterProps> = ({
                   {availableSections.map(sec => (
                     <option key={sec} value={sec}>Section {sec}</option>
                   ))}
+                  {selectedSection !== 'ALL' && !availableSections.includes(selectedSection) && (
+                    <option value={selectedSection}>Section {selectedSection}</option>
+                  )}
                 </select>
               </>
             )}

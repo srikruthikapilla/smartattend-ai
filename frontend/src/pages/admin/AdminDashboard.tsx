@@ -28,7 +28,7 @@ export const AdminDashboard: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [facultySearch, setFacultySearch] = useState('');
   const [studentSearch, setStudentSearch] = useState('');
-  const [selectedBranchFilter, setSelectedBranchFilter] = useState<'ALL' | 'CSE' | 'AI' | 'DS'>('ALL');
+  const [selectedBranchFilter, setSelectedBranchFilter] = useState<string>('ALL');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<'ALL' | 'APPROVED' | 'PENDING'>('ALL');
   const [selectedStudentUids, setSelectedStudentUids] = useState<string[]>([]);
   const [isDeletingStudents, setIsDeletingStudents] = useState(false);
@@ -89,14 +89,26 @@ export const AdminDashboard: React.FC = () => {
     return users.filter(u => u.role === 'student');
   }, [users]);
 
+  // Available branches from registered students
+  const availableStudentBranches = useMemo(() => {
+    const set = new Set<string>(['ALL']);
+    allStudents.forEach(st => {
+      const b = (st.branch || '').trim().toUpperCase();
+      if (b) set.add(b);
+    });
+    ['CSE', 'CSM', 'AI', 'DS'].forEach(b => set.add(b));
+    return Array.from(set);
+  }, [allStudents]);
+
   const filteredStudents = useMemo(() => {
     return allStudents.filter(st => {
       // Branch filter
       if (selectedBranchFilter !== 'ALL') {
-        const b = (st.branch || '').toUpperCase();
-        if (selectedBranchFilter === 'CSE' && b !== 'CSE') return false;
-        if (selectedBranchFilter === 'AI' && b !== 'AI' && !b.includes('AI')) return false;
-        if (selectedBranchFilter === 'DS' && b !== 'DS' && !b.includes('DS')) return false;
+        const b = (st.branch || '').trim().toUpperCase();
+        const target = selectedBranchFilter.trim().toUpperCase();
+        if (b !== target && !b.includes(target) && !target.includes(b)) {
+          return false;
+        }
       }
       // Status filter
       if (selectedStatusFilter !== 'ALL') {
@@ -576,12 +588,12 @@ export const AdminDashboard: React.FC = () => {
 
             <div className="flex items-center gap-2 flex-wrap text-xs">
               {/* Branch Filter Pills */}
-              <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200 dark:border-slate-700">
-                {(['ALL', 'CSE', 'AI', 'DS'] as const).map(b => (
+              <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200 dark:border-slate-700 overflow-x-auto max-w-full">
+                {availableStudentBranches.map(b => (
                   <button
                     key={b}
                     onClick={() => setSelectedBranchFilter(b)}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition font-heading ${
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition font-heading whitespace-nowrap ${
                       selectedBranchFilter === b
                         ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
                         : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
