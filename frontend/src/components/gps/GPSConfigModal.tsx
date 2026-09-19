@@ -234,12 +234,16 @@ export const GPSConfigModal: React.FC<GPSConfigModalProps> = ({ isOpen, onClose 
 
           <button
             type="button"
-            onClick={fetchServerGeofence}
-            disabled={isRefreshingServer}
+            onClick={() => {
+              setLat(17.2472);
+              setLng(80.1514);
+              setRadius(150);
+              setAddress('Swarna Bharathi Institute of Science and Technology (SBIT)');
+            }}
             className="py-2.5 px-3 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs border border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700 transition flex items-center justify-center gap-2"
           >
-            <RefreshCw className={`w-4 h-4 ${isRefreshingServer ? 'animate-spin' : ''}`} />
-            <span>{isRefreshingServer ? 'Syncing Server...' : 'Reload Master from Server'}</span>
+            <RefreshCw className="w-4 h-4" />
+            <span>Reset to SBIT Campus Default</span>
           </button>
         </div>
 
@@ -252,16 +256,23 @@ export const GPSConfigModal: React.FC<GPSConfigModalProps> = ({ isOpen, onClose 
         {savedSuccess && (
           <div className="p-3.5 rounded-xl bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-200 text-xs font-semibold flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-teal-600 dark:text-teal-400 flex-shrink-0" />
-            <span>Master college location saved to database and broadcast to all devices in real time!</span>
+            <span>Campus location successfully saved to database and broadcast to all devices in real time!</span>
           </div>
         )}
 
         {/* Action Buttons */}
-        <div className="flex items-center justify-between pt-4 border-t border-slate-200 dark:border-slate-800">
-          <p className="text-[11px] text-slate-400">
-            Coordinates will reflect on student phones, faculty dashboards & kiosks.
-          </p>
-          <div className="flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-slate-200 dark:border-slate-800">
+          <div>
+            <div className="flex items-center gap-1.5 text-xs font-bold text-teal-600 dark:text-teal-400 font-mono">
+              <MapPin className="w-3.5 h-3.5" />
+              <span>Target: {Number(lat).toFixed(4)}, {Number(lng).toFixed(4)} ({radius}m)</span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              Reflects immediately on student phones, faculty dashboards & kiosks.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 justify-end">
             <button
               type="button"
               onClick={onClose}
@@ -273,10 +284,19 @@ export const GPSConfigModal: React.FC<GPSConfigModalProps> = ({ isOpen, onClose 
             <button
               type="submit"
               disabled={isSaving}
-              className="px-5 py-2.5 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold text-xs uppercase tracking-wider shadow-sm hover:opacity-90 transition flex items-center gap-2 disabled:opacity-50"
+              className="px-6 py-2.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs uppercase tracking-wider shadow-md hover:shadow-lg shadow-teal-500/20 transition flex items-center gap-2 disabled:opacity-50 whitespace-nowrap"
             >
-              <Save className="w-4 h-4" />
-              {isSaving ? "Saving to Database..." : "Save Master Location"}
+              {isSaving ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Saving Location...</span>
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4" />
+                  <span>Save Location</span>
+                </>
+              )}
             </button>
           </div>
         </div>
