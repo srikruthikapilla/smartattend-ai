@@ -17,7 +17,7 @@ def get_health_status():
             conn.execute(text("SELECT 1"))
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
-        db_status = f"error: {str(e)}"
+        db_status = "unavailable"
 
     redis_info = test_redis_connection()
     smtp_info = get_smtp_status()
@@ -29,8 +29,8 @@ def get_health_status():
         "service": "Smart Attend FastAPI Backend",
         "version": "2.0.0",
         "database": db_status,
-        "redis": redis_info,
-        "smtp": smtp_info,
+        "redis": {"connected": redis_info.get("connected", False)},
+
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 

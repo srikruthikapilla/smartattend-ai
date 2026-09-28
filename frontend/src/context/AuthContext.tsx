@@ -25,6 +25,7 @@ import {
 
 interface AuthContextType {
   currentUser: UserProfile | null;
+  authLoading: boolean;
   users: UserProfile[];
 
   login(
@@ -168,21 +169,11 @@ export const AuthProvider: React.FC<{
   const [users, setUsers] = useState<UserProfile[]>([]);
 
   const [currentUser, setCurrentUser] =
-    useState<UserProfile | null>(() => {
-      try {
-        const cached = localStorage.getItem('sbit_user');
-        return cached ? JSON.parse(cached) : null;
-      } catch {
-        return null;
-      }
-    });
+    useState<UserProfile | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
   const getAuthHeaders = (): Record<string, string> => {
-    const token = localStorage.getItem('sbit_auth_token');
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    };
+    return { 'Content-Type': 'application/json' };
   };
 
   // Restore session from backend on mount
@@ -223,7 +214,9 @@ export const AuthProvider: React.FC<{
           }
         }
       } catch (e) {
-        // Not authenticated
+        setCurrentUser(null);
+      } finally {
+        setAuthLoading(false);
       }
     };
     restoreSession();
@@ -312,9 +305,7 @@ export const AuthProvider: React.FC<{
           status: u.status || 'approved',
           createdAt: u.created_at || u.createdAt || new Date().toISOString()
         };
-        if (data.token) {
-          localStorage.setItem('sbit_auth_token', data.token);
-        }
+        localStorage.removeItem('sbit_auth_token');
         localStorage.setItem('sbit_user', JSON.stringify(backendUser));
         setUsers(prev => {
           const exists = prev.some(usr => usr.uid === backendUser.uid || usr.email === backendUser.email);
@@ -333,12 +324,14 @@ export const AuthProvider: React.FC<{
 
   const logout = async () => {
     try {
-      await fetch('/api/auth/logout', {
+      const response = await fetch('/api/auth/logout', {
         method: 'POST',
         credentials: 'include'
       });
+      if (!response.ok) throw new Error('Session revocation failed.');
     } catch (err) {
-      console.warn('Backend logout note:', err);
+      alert('Could not revoke your session on the server. Please retry signing out.');
+      return;
     }
     
     localStorage.removeItem('sbit_auth_token');
@@ -925,58 +918,15 @@ export const AuthProvider: React.FC<{
     const enrolledAt = new Date().toISOString();
     const student = users.find(u => u.uid === uid) || (currentUser?.uid === uid ? currentUser : null);
     const hallTicketNo = student?.hallTicketNo;
-    const failures: string[] = [];
-    let persisted = false;
-
-
-
-    // 2. FastAPI backend sync
-    // Token is now in httpOnly cookie
-    const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-
-    if (hallTicketNo) {
-      try {
-        const resp = await fetch('/api/student/register-biometrics', {
-          method: 'POST',
-          headers: authHeaders,
-          credentials: 'include',
-          body: JSON.stringify({
-            hallTicketNo: hallTicketNo,
-            name: student?.name || currentUser?.name || `Student (${hallTicketNo})`,
-            branch: student?.branch || currentUser?.branch || 'CSE',
-            section: student?.section || currentUser?.section || 'A',
-            faceDescriptor: descriptor,
-            biometricCredentialId: student?.biometricCredentialId || 'bio_auto_registered'
-          })
-        });
-        if (resp.ok) {
-          localStorage.setItem(`enrolled_${hallTicketNo}`, 'true');
-          persisted = true;
-        }
-      } catch (err) {
-        failures.push(`Backend register-biometrics note: ${String(err)}`);
-      }
-    }
-
-    // Call /api/students/{id}/enroll-face
-    try {
-      const targetId = hallTicketNo || uid;
-      const resp = await fetch(`/api/students/${targetId}/enroll-face`, {
-        method: 'POST',
-        headers: authHeaders,
-        credentials: 'include',
-        body: JSON.stringify({
-          faceDescriptor: descriptor,
-          hallTicketNo: hallTicketNo,
-          studentConsent: true,
-          algorithm: descriptor.length === 512 ? 'arcface_512' : 'facenet_128'
-        })
-      });
-      if (resp.ok) {
-        persisted = true;
-      }
-    } catch (err) {
-      failures.push(`Backend enroll-face note: ${String(err)}`);
+    const targetId = hallTicketNo || uid;
+    const response = await fetch(`/api/students/${encodeURIComponent(targetId)}/enroll-face`, {
+      method: 'POST', headers: getAuthHeaders(), credentials: 'include',
+      body: JSON.stringify({ faceDescriptor: descriptor, hallTicketNo, studentConsent: true,
+        algorithm: descriptor.length === 512 ? 'arcface_512' : 'facenet_128' })
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || 'Face enrollment could not be saved.');
     }
 
     setUsers(prev =>
@@ -1175,11 +1125,8 @@ export const AuthProvider: React.FC<{
     }
   };
 
-  const switchUser = (uid: string) => {
-    const user = users.find(u => u.uid === uid);
-    if (user) {
-      setCurrentUser(user);
-    }
+  const switchUser = (_uid: string) => {
+    throw new Error("Sign out and authenticate to switch accounts.");
   };
 
   const pendingStudents = useMemo(
@@ -1198,6 +1145,7 @@ export const AuthProvider: React.FC<{
     <AuthContext.Provider
       value={{
         currentUser,
+        authLoading,
         users,
         login,
         logout,

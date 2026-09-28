@@ -130,20 +130,6 @@ def update_geofence_config(
         logger.error(f"Failed to persist geofence update: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Database failure: unable to update geofence configuration.")
 
-    # Update any active live session in memory so students currently scanning immediately match
-    try:
-        from app.routes import qr_session
-        if qr_session.current_session:
-            qr_session.current_session["faculty_lat"] = payload.center_lat
-            qr_session.current_session["faculty_lng"] = payload.center_lng
-            qr_session.current_session["radius_meters"] = payload.radius_m
-            if "geofence" in qr_session.current_session and isinstance(qr_session.current_session["geofence"], dict):
-                qr_session.current_session["geofence"]["lat"] = payload.center_lat
-                qr_session.current_session["geofence"]["lng"] = payload.center_lng
-                qr_session.current_session["geofence"]["radiusMeters"] = payload.radius_m
-    except Exception as err:
-        logger.warning(f"Active session geofence sync note: {err}")
-
     # Broadcast real-time update to all connected devices via Socket.io
     try:
         from app.services.redis_queue import enqueue_socketio_broadcast

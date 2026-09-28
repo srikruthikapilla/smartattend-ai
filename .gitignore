@@ -127,3 +127,6 @@ skills-lock.json
 docker-compose.override.yml
 
 
+
+# Isolated security verification environment
+backend/.venv-security/

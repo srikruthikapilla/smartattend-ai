@@ -102,7 +102,7 @@ def get_or_create_valid_session_id(
 
 @router.get("/records")
 def get_all_attendance_records(
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    current_user: Dict[str, Any] = Depends(require_role(["admin", "faculty"])),
     db: Session = Depends(get_db)
 ):
     """
@@ -126,7 +126,7 @@ def get_all_attendance_records(
 @router.get("/date/{target_date}")
 def get_attendance_by_date(
     target_date: str,
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    current_user: Dict[str, Any] = Depends(require_role(["admin", "faculty"])),
     db: Session = Depends(get_db)
 ):
     """
@@ -182,7 +182,7 @@ def get_attendance_by_date(
 @router.post("/capture")
 async def capture_attendance(
     payload: AttendanceCaptureRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    current_user: Dict[str, Any] = Depends(require_role(["admin", "faculty"])),
     db: Session = Depends(get_db)
 ):
     """
@@ -665,7 +665,7 @@ def mark_attendance_direct(
 @router.post("/verify-face")
 def verify_face_direct(
     payload: VerifyFaceDirectPayload,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(require_role(["admin", "faculty"]))
 ):
     """
     Real-time Face Vector Verification Endpoint using native NumPy distance calculator.

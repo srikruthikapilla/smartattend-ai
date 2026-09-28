@@ -1,18 +1,6 @@
 import * as faceapi from "face-api.js";
-
-let modelsLoaded = false;
-
+import { loadFaceApiModels } from "./faceRecognition";
 export async function loadFaceModels() {
-  if (modelsLoaded) return;
-
-  await Promise.all([
-    faceapi.nets.tinyFaceDetector.loadFromUri("/models"),
-    faceapi.nets.faceLandmark68Net.loadFromUri("/models"),
-    faceapi.nets.faceRecognitionNet.loadFromUri("/models"),
-  ]);
-
-  modelsLoaded = true;
-  console.log("✅ Face models loaded successfully");
+  if (!await loadFaceApiModels()) throw new Error("Face models could not be loaded.");
 }
-
 export { faceapi };

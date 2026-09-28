@@ -2,6 +2,16 @@ import numpy as np
 import math
 from typing import List, Tuple
 
+def valid_face_vector(value) -> bool:
+    if not isinstance(value, (list, tuple)) or len(value) not in (128, 512):
+        return False
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in value):
+        return False
+    vector = np.asarray(value, dtype=np.float64)
+    norm = np.linalg.norm(vector)
+    return bool(np.isfinite(vector).all() and np.isfinite(norm) and norm > 1e-8)
+
+
 def compare_face_embeddings(
     enrolled_vec: List[float],
     live_vec: List[float],
@@ -17,7 +27,7 @@ def compare_face_embeddings(
       - Different person: distance typically 0.50–1.40
       - Decision boundary: 0.42 (calibrated, zero false-accept for impostors, accommodates lighting/angle)
     """
-    if not enrolled_vec or not live_vec or len(enrolled_vec) != len(live_vec):
+    if not valid_face_vector(enrolled_vec) or not valid_face_vector(live_vec) or len(enrolled_vec) != len(live_vec):
         return False, 1.0, 0
 
     v1 = np.array(enrolled_vec, dtype=np.float64)

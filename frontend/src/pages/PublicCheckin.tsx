@@ -15,6 +15,7 @@ import {
   type EnrollmentProgress
 } from '../utils/faceRecognition';
 import { enrollPlatformBiometrics, verifyPlatformBiometrics } from '../utils/webauthnBiometrics';
+import { calculateDistance } from '../utils/gps';
 import {
   QrCode, MapPin, ScanFace, Eye, CheckCircle2, AlertTriangle,
   Sparkles, Fingerprint, RefreshCw, ArrowRight, User,
@@ -35,16 +36,6 @@ async function safeJson(resp: Response): Promise<any> {
   }
 }
 
-function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371000;
-  const dLat = (lat2 - lat1) * (Math.PI / 180);
-  const dLon = (lon2 - lon1) * (Math.PI / 180);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return Math.round(R * c);
-}
 
 export const PublicCheckin: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -115,10 +106,14 @@ export const PublicCheckin: React.FC = () => {
     checked: boolean;
   }>({ isMatch: false, distance: 1, confidencePct: 0, checked: false });
 
+  const verificationInFlight = useRef(false);
+  const latestFaceEvidence = useRef<{ landmarks: number[][]; history: number[] } | null>(null);
   const blinkDetectorRef = useRef<BlinkDetector>(new BlinkDetector());
 
   // Clean reset function for complete state wipe on Retry / Restart
   const resetAllCheckinState = () => {
+    verificationInFlight.current = false;
+    latestFaceEvidence.current = null;
     setBlinkDetected(false);
     setBlinkProgress(0);
     setFaceDetectedInFrame(false);
@@ -140,6 +135,8 @@ export const PublicCheckin: React.FC = () => {
 
   // Attendance Checker State
   const [checkHallTicket, setCheckHallTicket] = useState<string>('');
+  const [reportOtpSent, setReportOtpSent] = useState(false);
+  const [reportOtp, setReportOtp] = useState('');
   const [checkError, setCheckError] = useState<string>('');
   const [isLoadingReport, setIsLoadingReport] = useState<boolean>(false);
   const [studentReport, setStudentReport] = useState<any>(null);
@@ -209,6 +206,7 @@ export const PublicCheckin: React.FC = () => {
     try {
       const resp = await fetch(`/api/student/check-status/${formatted}`);
       const data = await safeJson(resp);
+      if (!resp.ok) throw new Error(data.detail || "Unable to check face enrollment. Please retry.");
 
       // 1. If already marked present today / in this session -> Directly show Attendance Success!
       if (data.isAlreadyMarked && data.alreadyMarkedRecord) {
@@ -245,15 +243,7 @@ export const PublicCheckin: React.FC = () => {
         setStep('first_time_enrollment');
       }
     } catch (err) {
-      localStorage.removeItem(`enrolled_${formatted}`);
-      setEnrolledFaceDescriptor(null);
-      setEnrollmentToken(null);
-      setEnrollOtp('');
-      setOtpSent(false);
-      setOtpError('');
-      enrollmentStartedRef.current = false;
-      setEnrollStep('otp');
-      setStep('first_time_enrollment');
+      setHallTicketError(err instanceof Error ? err.message : 'Unable to check enrollment. Please retry.');
     }
   };
 
@@ -347,9 +337,12 @@ export const PublicCheckin: React.FC = () => {
     if (!isEnrollmentCameraReady) return;
     if (enrollFaceError) return;
 
+    const controller = new AbortController();
+    enrollmentStartedRef.current = true;
     // Wait for webcam to be ready
     const startEnrollment = async () => {
       await new Promise(r => setTimeout(r, 1200)); // give webcam time to init
+      if (controller.signal.aborted) return;
       const video = webcamRef.current?.video;
       if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
         setEnrollFaceError('Camera not available. Please allow camera access.');
@@ -364,9 +357,11 @@ export const PublicCheckin: React.FC = () => {
         video,
         (progress) => setEnrollProgress(progress),
         8,    // 8 frames
-        500   // every 500ms = ~4 seconds total
+        500,
+        controller.signal
       );
 
+      if (controller.signal.aborted) return;
       setIsCapturingFace(false);
 
       if (descriptor && descriptor.length === 128) {
@@ -383,6 +378,7 @@ export const PublicCheckin: React.FC = () => {
         // 1. Save permanently to PostgreSQL database before attendance scan.
         try {
           await persistFaceEnrollment(descriptor);
+          if (controller.signal.aborted) return;
           localStorage.setItem(`enrolled_${hallTicket}`, 'true');
         } catch (saveErr) {
           console.warn('Auto biometric save error:', saveErr);
@@ -400,8 +396,7 @@ export const PublicCheckin: React.FC = () => {
 
         // 2. Automatically advance DIRECTLY to live attendance detection!
         setTimeout(() => {
-          setStep('location_check');
-          verifyLocation();
+          if (!controller.signal.aborted) verifyLocation();
         }, 1200);
       } else {
         enrollmentStartedRef.current = false; // allow retry
@@ -411,6 +406,7 @@ export const PublicCheckin: React.FC = () => {
     };
 
     startEnrollment();
+    return () => { controller.abort(); enrollmentStartedRef.current = false; };
   }, [step, enrollStep, isModelLoading, isEnrollmentCameraReady, enrollFaceError]);
 
   // 4b. Manual retry button
@@ -430,7 +426,8 @@ export const PublicCheckin: React.FC = () => {
       const bioRes = await enrollPlatformBiometrics(
         hallTicket,
         studentName || `Student ${hallTicket}`,
-        `${hallTicket.toLowerCase()}@sbit.ac.in`
+        `${hallTicket.toLowerCase()}@sbit.ac.in`,
+        enrollmentToken
       );
       if (bioRes.success) {
         setEnrolledBioCredentialId(bioRes.credentialId || 'bio_cred_001');
@@ -463,45 +460,44 @@ export const PublicCheckin: React.FC = () => {
 
   // 6. Geolocation (Seamless & Non-Intrusive — Dynamic Session Baseline)
   const verifyLocation = () => {
-    // Dynamic session / campus coordinates baseline
-    const baselineLat = Number(geofenceData?.centerLat ?? sessionData?.faculty_lat ?? 17.2472);
-    const baselineLng = Number(geofenceData?.centerLng ?? sessionData?.faculty_lng ?? 80.1514);
-    setCurrentCoords({ lat: baselineLat, lng: baselineLng });
-    setDistanceMeters(0);
-
-    // Silently capture GPS in background if permission is already granted or available
-    if (typeof navigator !== 'undefined' && navigator.geolocation) {
-      try {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            const lat = pos.coords.latitude;
-            const lng = pos.coords.longitude;
-            setCurrentCoords({ lat, lng });
-            const dist = calculateDistanceMeters(lat, lng, baselineLat, baselineLng);
-            setDistanceMeters(dist);
-          },
-          () => {
-            // Silently maintain session baseline
-          },
-          { enableHighAccuracy: false, timeout: 2500, maximumAge: 60000 }
-        );
-      } catch {
-        // Silently maintain session baseline
-      }
+    setCurrentCoords(null);
+    setStep('location_check');
+    if (!navigator.geolocation) {
+      setErrorMessage('This browser does not support location verification.');
+      setStep('location_error');
+      return;
     }
+    navigator.geolocation.getCurrentPosition(pos => {
+      const { latitude: lat, longitude: lng } = pos.coords;
+      const centerLat = Number(geofenceData?.centerLat ?? sessionData?.faculty_lat);
+      const centerLng = Number(geofenceData?.centerLng ?? sessionData?.faculty_lng);
+      const sessionRadius = Number(geofenceData?.radiusMeters ?? sessionData?.radius_meters ?? 150);
+      const distance = calculateDistance(lat, lng, centerLat, centerLng);
+      setDistanceMeters(distance);
 
-    // Immediately advance to camera scan without showing blocking location dialogs
-    setStep('camera_scan');
+      if (distance > sessionRadius) {
+        setErrorMessage(`Outside allowed radius: ${distance}m from session center (allowed: ${sessionRadius}m).`);
+        setStep('location_error');
+        return;
+      }
+
+      setCurrentCoords({ lat, lng });
+      setStep('camera_scan');
+    }, error => {
+      setErrorMessage(error.code === 1 ? 'Allow location access to verify classroom attendance.' : 'Could not obtain your location. Move near a window and retry.');
+      setStep('location_error');
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
   };
 
   // 7. Real-Time Camera, Eye Blink Liveness & Live Face Matching Loop
   useEffect(() => {
-    if (step !== 'camera_scan') return;
+    if (step !== 'camera_scan' || isModelLoading || enrollFaceError) return;
 
     const detector = blinkDetectorRef.current;
     detector.reset();
     let isProcessing = false;
     let submitted = false;
+    let cancelled = false;
 
     const interval = setInterval(async () => {
       if (submitted || isProcessing || !webcamRef.current?.video) return;
@@ -511,8 +507,12 @@ export const PublicCheckin: React.FC = () => {
       isProcessing = true;
       try {
         const detection = await detectFaceWithLandmarks(video);
+        if (cancelled) return;
 
         if (detection?.multipleFaces) {
+          detector.reset();
+          latestFaceEvidence.current = null;
+          setBlinkDetected(false);
           setFaceDetectedInFrame(true);
           setMultipleFacesDetected(true);
           setDetectedFaceCount(detection.faceCount || 2);
@@ -552,6 +552,7 @@ export const PublicCheckin: React.FC = () => {
           if (detection.landmarks) {
             const { hasBlinked, isClosed, progressPct } = detector.processFrame(detection.landmarks);
             setBlinkProgress(progressPct);
+            latestFaceEvidence.current = { landmarks: extractLandmarkPoints(detection.landmarks), history: detector.getEarHistory() };
 
             // Only trigger on the specific frame that completes a blink (hasBlinked is now per-frame, not permanent)
             if (hasBlinked) {
@@ -596,6 +597,10 @@ export const PublicCheckin: React.FC = () => {
             );
           }
         } else {
+          detector.reset();
+          latestFaceEvidence.current = null;
+          setBlinkDetected(false);
+          setLastDetectedDescriptor(null);
           setFaceDetectedInFrame(false);
           setLivenessStatus('Position your face inside the frame');
           setLiveMatchStatus({ isMatch: false, distance: 1.0, confidencePct: 0, checked: false });
@@ -607,8 +612,8 @@ export const PublicCheckin: React.FC = () => {
       }
     }, 75);
 
-    return () => clearInterval(interval);
-  }, [step, isModelLoading, enrolledFaceDescriptor]);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [step, isModelLoading, enrolledFaceDescriptor, enrollFaceError]);
 
   // 8. Submit Final Attendance Verification
   const handleFinalVerification = async (
@@ -635,10 +640,14 @@ export const PublicCheckin: React.FC = () => {
       }
     }
 
-    const effectiveCoords = currentCoords || {
-      lat: Number(geofenceData?.centerLat ?? sessionData?.faculty_lat ?? 17.2472),
-      lng: Number(geofenceData?.centerLng ?? sessionData?.faculty_lng ?? 80.1514)
-    };
+    if (!currentCoords) { verifyLocation(); return; }
+    if (verificationInFlight.current) return;
+    if (!isBiometricFallback && (!faceLandmarks || !earHistory)) {
+      setLivenessStatus('Please complete a fresh blink in front of the camera.');
+      return;
+    }
+    verificationInFlight.current = true;
+    const effectiveCoords = currentCoords;
 
     setStep('verifying');
 
@@ -654,6 +663,8 @@ export const PublicCheckin: React.FC = () => {
       } catch (cErr) {
         console.warn('Challenge nonce fetch note:', cErr);
       }
+
+      if (!isBiometricFallback && !challengeToken) throw new Error("Could not start a secure face check. Please retry.");
 
       // 2. Capture live camera frame snapshot at blink moment
       let captureImage: string | undefined = undefined;
@@ -671,7 +682,7 @@ export const PublicCheckin: React.FC = () => {
         hallTicket,
         lat: effectiveCoords.lat,
         lng: effectiveCoords.lng,
-        faceDescriptor,
+        faceDescriptor: isBiometricFallback ? null : faceDescriptor,
         faceLandmarks: faceLandmarks || null,
         earHistory: earHistory || null,
         blinkVerified: isBlinkVerified,
@@ -705,6 +716,8 @@ export const PublicCheckin: React.FC = () => {
     } catch (err: any) {
       setStep('error');
       setErrorMessage(err.message || 'Unable to connect to verification server. Please try again.');
+    } finally {
+      verificationInFlight.current = false;
     }
   };
 
@@ -714,11 +727,7 @@ export const PublicCheckin: React.FC = () => {
     try {
       const result = await verifyPlatformBiometrics(hallTicket);
       if (result.success && result.assertion) {
-        const dummyDescriptor = Array(128).fill(0.05);
-        await handleFinalVerification(dummyDescriptor, false, undefined, undefined, true, result.assertion);
-      } else if (result.success) {
-        const dummyDescriptor = Array(128).fill(0.05);
-        await handleFinalVerification(dummyDescriptor, false, undefined, undefined, true);
+        await handleFinalVerification([], false, undefined, undefined, true, result.assertion);
       } else {
         alert(result.message || 'Device biometric authentication was cancelled or failed.');
       }
@@ -742,11 +751,29 @@ export const PublicCheckin: React.FC = () => {
     setStudentReport(null);
 
     try {
-      const resp = await fetch(`/api/student/records/${formatted}`);
+      if (!reportOtpSent) {
+        const sent = await fetch('/api/auth/student/enrollment/request-otp', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hall_ticket_no: formatted })
+        });
+        if (!sent.ok) throw new Error((await safeJson(sent)).detail || 'Could not send verification code.');
+        setReportOtpSent(true);
+        return;
+      }
+      const verified = await fetch('/api/auth/student/enrollment/verify-otp', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hall_ticket_no: formatted, otp: reportOtp })
+      });
+      const verification = await safeJson(verified);
+      if (!verified.ok) throw new Error(verification.detail || 'Invalid verification code.');
+      const resp = await fetch(`/api/student/records/${formatted}`, {
+        headers: { 'X-Student-Report-Token': verification.report_token }
+      });
+      if (!resp.ok) throw new Error('Attendance lookup failed.');
       const data = await safeJson(resp);
       setStudentReport(data);
     } catch (err) {
-      setCheckError('Unable to fetch attendance records. Please check your connection and try again.');
+      setCheckError(err instanceof Error ? err.message : 'Attendance lookup failed.');
       setStudentReport(null);
     } finally {
       setIsLoadingReport(false);
@@ -1278,16 +1305,6 @@ export const PublicCheckin: React.FC = () => {
                     <RefreshCw className="w-3.5 h-3.5" />
                     <span>Retry Location Check</span>
                   </button>
-
-                  <button
-                    onClick={() => {
-                      setStep('camera_scan');
-                    }}
-                    className="w-full bg-teal-50 dark:bg-teal-950/40 hover:bg-teal-100 dark:hover:bg-teal-900/40 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800 font-bold py-2.5 px-4 rounded-xl text-xs uppercase tracking-wider transition font-heading flex items-center justify-center gap-2"
-                  >
-                    <MapPin className="w-3.5 h-3.5 text-teal-600" />
-                    <span>In-Classroom Verification (Proceed to Scan)</span>
-                  </button>
                 </div>
               </div>
             )}
@@ -1487,7 +1504,7 @@ export const PublicCheckin: React.FC = () => {
                       }
 
                       setBlinkAlertNotice(null);
-                      handleFinalVerification(lastDetectedDescriptor, blinkDetected);
+                      handleFinalVerification(lastDetectedDescriptor, blinkDetected, latestFaceEvidence.current?.landmarks, latestFaceEvidence.current?.history);
                     }}
                     className={`w-full py-3.5 px-4 rounded-xl font-extrabold text-xs uppercase tracking-wider transition-all shadow-sm flex items-center justify-center gap-2 font-heading ${
                       !faceDetectedInFrame || multipleFacesDetected
@@ -1758,6 +1775,9 @@ export const PublicCheckin: React.FC = () => {
                     value={checkHallTicket}
                     onChange={(e) => {
                       setCheckHallTicket(e.target.value.toUpperCase());
+                      setReportOtpSent(false);
+                      setReportOtp('');
+                      setStudentReport(null);
                       setCheckError('');
                     }}
                     placeholder="e.g. 24M61A6601"
@@ -1766,6 +1786,11 @@ export const PublicCheckin: React.FC = () => {
                     autoFocus
                   />
                 </div>
+                {reportOtpSent && (
+                  <label className="block text-sm">Enter the code sent to your registered email
+                    <input aria-label="Attendance verification code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={reportOtp} onChange={e => setReportOtp(e.target.value)} className="block w-full p-3 border rounded-lg bg-transparent" />
+                  </label>
+                )}
                 {checkError && (
                   <p className="text-xs text-rose-600 dark:text-rose-400 font-semibold flex items-center gap-1 mt-1">
                     <AlertCircle className="w-3.5 h-3.5" />
@@ -1780,7 +1805,7 @@ export const PublicCheckin: React.FC = () => {
                 className="w-full bg-slate-900 dark:bg-white hover:bg-slate-800 dark:hover:bg-slate-100 text-white dark:text-slate-900 font-extrabold py-3.5 px-6 rounded-xl text-xs uppercase tracking-wider shadow-sm transition-all flex items-center justify-center gap-2 font-heading"
               >
                 {isLoadingReport ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                <span>View Attendance & Eligibility</span>
+                <span>{reportOtpSent ? 'Verify & View Attendance' : 'Send Email Verification Code'}</span>
               </button>
             </form>
 

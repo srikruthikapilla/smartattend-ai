@@ -1,205 +1,106 @@
-"""
-Smart Attend — Dynamic QR Session Routes
-==========================================
-Active classroom attendance sessions are stored and tracked in PostgreSQL.
-"""
-
+"""Server-issued QR capabilities; the database controls session lifetime."""
 import time
 import uuid
-import logging
 import jwt
-from fastapi import APIRouter, HTTPException, Depends, Request
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
-
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, or_
-from sqlalchemy.exc import IntegrityError
-
 from app.config import JWT_SECRET
-from app.models.schemas import QRSessionStartPayload
-from app.models.db_models import AttendanceSession
 from app.database import get_db
 from app.dependencies.auth import require_role
+from app.models.db_models import AttendanceSession
+from app.models.schemas import QRSessionStartPayload
 from app.routes.auth import _rate_limit
 from app.utils.geofence import current_geofence
 
-logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/api/qr-session", tags=["Dynamic QR Session"])
 
-current_session: Optional[Dict[str, Any]] = None
-valid_session_tokens: Dict[str, Dict[str, Any]] = {}
 
-def generate_signed_token(session_id: str, faculty_id: str, branch: str, section: str) -> str:
-    # Extended 2-hour validity for classroom checkin grace window
-    payload = {
-        "sessionId": session_id,
-        "facultyId": faculty_id,
-        "branch": branch,
-        "section": section,
-        "exp": datetime.now(timezone.utc) + timedelta(hours=2)
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+def generate_signed_token(session_id, faculty_id, branch, section):
+    # Stable within a rotation interval, with a short scan/submission grace period.
+    interval = int(time.time()) // 60 * 60
+    return jwt.encode({"type": "qr", "sessionId": session_id,
+                       "iat": interval, "exp": interval + 120}, JWT_SECRET, algorithm="HS256")
+
+
+def resolve_session(token, db):
+    try:
+        claims = jwt.decode(token, JWT_SECRET, algorithms=["HS256"],
+                            options={"require": ["exp", "iat", "type", "sessionId"]})
+        if claims["type"] != "qr":
+            raise ValueError("Wrong token purpose")
+        session_id = uuid.UUID(claims["sessionId"])
+    except (jwt.PyJWTError, ValueError, TypeError, KeyError):
+        raise HTTPException(403, "Invalid or expired QR token. Scan the current QR code.")
+    session = db.query(AttendanceSession).filter(
+        AttendanceSession.id == session_id,
+        AttendanceSession.status == "active",
+        AttendanceSession.end_time > datetime.now(timezone.utc)
+    ).first()
+    if not session:
+        raise HTTPException(403, "Attendance session has ended or expired.")
+    return session
+
+
+def session_response(session):
+    token = generate_signed_token(str(session.id), session.faculty_id, session.branch, session.section)
+    remaining = max(0, int(session.end_time.timestamp() - time.time()))
+    return {"success": True, "active": True, "secondsRemaining": remaining,
+            "rotationRemaining": 60 - int(time.time()) % 60,
+            "checkinUrl": f"/checkin?token={token}", "session": {
+                "sessionId": str(session.id), "facultyId": session.faculty_id,
+                "facultyName": session.faculty_name, "sessionTitle": session.session_title,
+                "branch": session.branch, "section": session.section, "room": session.room,
+                "token": token, "raw_token": token, "radius_meters": session.radius_meters,
+                "createdAt": session.start_time.isoformat(),
+                "expiresAt": int(session.end_time.timestamp() * 1000)}}
+
 
 @router.post("/start")
-def start_qr_session(
-    payload: QRSessionStartPayload,
-    current_user: Dict[str, Any] = Depends(require_role(["faculty", "admin"])),
-    db: Session = Depends(get_db)
-):
-    """
-    Faculty starts/refreshes the live session; issues an extended valid token.
-    Requires Faculty or Admin authentication.
-    """
-    global current_session
-    faculty_id = str(current_user.get("id") or current_user.get("sub", "faculty_201"))
-    faculty_name = payload.facultyName or current_user.get("user_metadata", {}).get("name") or "Faculty Member"
+def start_qr_session(payload: QRSessionStartPayload,
+                     current_user=Depends(require_role(["faculty", "admin"])),
+                     db: Session = Depends(get_db)):
+    now = datetime.now(timezone.utc)
+    session = AttendanceSession(
+        id=uuid.uuid4(), faculty_id=current_user["id"], faculty_name=current_user["name"],
+        session_title=payload.sessionTitle, branch=payload.branch, section=payload.section,
+        room=payload.room, start_time=now,
+        end_time=now + timedelta(minutes=payload.durationMinutes), status="active",
+        radius_meters=payload.radiusMeters,
+        geofence={"lat": payload.latitude if payload.latitude is not None else current_geofence["center_lat"],
+                  "lng": payload.longitude if payload.longitude is not None else current_geofence["center_lng"]})
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session_response(session)
 
-    db_session_id = None
-    if payload.sessionId:
-        try:
-            db_session_id = uuid.UUID(payload.sessionId)
-        except Exception:
-            db_session_id = uuid.uuid4()
-    else:
-        db_session_id = uuid.uuid4()
-
-    session_id_str = str(db_session_id)
-    raw_token_id = str(payload.rawToken).strip() if payload.rawToken else str(uuid.uuid4())
-    token = generate_signed_token(
-        session_id_str,
-        faculty_id,
-        payload.branch or "CSE",
-        payload.section or "A"
-    )
-
-    now_dt = datetime.now(timezone.utc)
-    end_dt = now_dt + timedelta(hours=2)
-
-    current_session = {
-        "sessionId": session_id_str,
-        "facultyId": faculty_id,
-        "facultyName": faculty_name,
-        "sessionTitle": payload.sessionTitle or "Academic Session",
-        "branch": payload.branch or "CSE",
-        "section": payload.section or "A",
-        "room": payload.room or "Innovation Centre Lab",
-        "token": token,
-        "raw_token": raw_token_id,
-        "faculty_lat": payload.latitude or current_geofence.get("center_lat", 17.2472),
-        "faculty_lng": payload.longitude or current_geofence.get("center_lng", 80.1514),
-        "radius_meters": payload.radiusMeters or current_geofence.get("radius_m", 150),
-        "expiresAt": int(time.time() * 1000) + (120 * 60 * 1000),  # 2 hours
-        "createdAt": now_dt.isoformat()
-    }
-
-    # Store token in active history buffer
-    valid_session_tokens[raw_token_id] = current_session
-    valid_session_tokens[token] = current_session
-    valid_session_tokens[session_id_str] = current_session
-
-    # Persist session to PostgreSQL — narrow exception handling;
-    # IntegrityError is the expected failure case (duplicate session id).
-    try:
-        new_sess = AttendanceSession(
-            id=db_session_id,
-            session_title=current_session["sessionTitle"],
-            faculty_id=faculty_id,
-            faculty_name=faculty_name,
-            branch=current_session["branch"],
-            section=current_session["section"],
-            room=current_session["room"],
-            start_time=now_dt,
-            end_time=end_dt,
-            status="active",
-            qr_token=raw_token_id,
-            radius_meters=payload.radiusMeters or current_geofence.get("radius_m", 150),
-            geofence={
-                "lat": payload.latitude or current_geofence.get("center_lat", 17.2472),
-                "lng": payload.longitude or current_geofence.get("center_lng", 80.1514)
-            }
-        )
-        db.add(new_sess)
-        db.commit()
-    except IntegrityError as e:
-        db.rollback()
-        logger.warning(f"Duplicate session insert: {e}")
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Session insert failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create check-in session.")
-
-    return {
-        "success": True,
-        "session": current_session,
-        "checkinUrl": f"/checkin?token={raw_token_id}"
-    }
 
 @router.get("/current")
-@_rate_limit("10/minute")
-def get_current_qr_session(request: Request, db: Session = Depends(get_db)):
-    """
-    Faculty dashboard polls this to render the current dynamic QR code.
-    Publicly accessible to support classroom display screens.
-    """
-    global current_session
+@_rate_limit("30/minute")
+def get_current_qr_session(request: Request,
+                           current_user=Depends(require_role(["faculty", "admin"])),
+                           db: Session = Depends(get_db)):
+    query = db.query(AttendanceSession).filter(
+        AttendanceSession.status == "active",
+        AttendanceSession.end_time > datetime.now(timezone.utc))
+    if current_user["role"] != "admin":
+        query = query.filter(AttendanceSession.faculty_id == current_user["id"])
+    session = query.order_by(AttendanceSession.created_at.desc()).first()
+    if not session:
+        raise HTTPException(404, "No active session.")
+    return session_response(session)
 
-    if not current_session:
-        # Check if there is an active session in PostgreSQL
-        try:
-            now_dt = datetime.now(timezone.utc)
-            cutoff = now_dt - timedelta(hours=4)
-            s = (
-                db.query(AttendanceSession)
-                .filter(AttendanceSession.status == "active")
-                .filter(or_(AttendanceSession.end_time == None, AttendanceSession.end_time > now_dt, AttendanceSession.created_at >= cutoff))
-                .order_by(desc(AttendanceSession.created_at))
-                .first()
-            )
-            if s:
-                raw_tok = s.qr_token or str(uuid.uuid4())
-                current_session = {
-                    "sessionId": str(s.id),
-                    "facultyId": s.faculty_id or "faculty_201",
-                    "facultyName": s.faculty_name or "Faculty Member",
-                    "sessionTitle": s.session_title or "Active Academic Session",
-                    "branch": s.branch or "CSE",
-                    "section": s.section or "A",
-                    "room": s.room or "Innovation Centre Lab",
-                    "token": "",
-                    "raw_token": raw_tok,
-                    "expiresAt": int(s.end_time.timestamp() * 1000) if s.end_time else (int(time.time() * 1000) + (120 * 60 * 1000)),
-                    "createdAt": s.created_at.isoformat() if s.created_at else datetime.now(timezone.utc).isoformat()
-                }
-                valid_session_tokens[raw_tok] = current_session
-                valid_session_tokens[str(s.id)] = current_session
-        except Exception as e:
-            logger.warning(f"Could not load active session from PostgreSQL: {e}")
 
-    if not current_session:
-        raise HTTPException(status_code=404, detail="No active QR session currently.")
-
-    now_ms = int(time.time() * 1000)
-    # Auto-refresh if expiring
-    if now_ms > current_session["expiresAt"] - 5000:
-        new_tok = generate_signed_token(
-            current_session["sessionId"],
-            current_session["facultyId"],
-            current_session["branch"],
-            current_session["section"]
-        )
-        current_session["token"] = new_tok
-        current_session["expiresAt"] = now_ms + (120 * 60 * 1000)
-        valid_session_tokens[new_tok] = current_session
-        if current_session.get("raw_token"):
-            valid_session_tokens[current_session["raw_token"]] = current_session
-
-    seconds_remaining = max(30, int((current_session["expiresAt"] - now_ms) / 1000))
-
-    return {
-        "active": True,
-        "session": current_session,
-        "secondsRemaining": seconds_remaining,
-        "checkinUrl": f"/checkin?token={current_session.get('raw_token', '')}"
-    }
+@router.post("/{session_id}/end")
+def end_session(session_id: uuid.UUID,
+                current_user=Depends(require_role(["faculty", "admin"])),
+                db: Session = Depends(get_db)):
+    session = db.query(AttendanceSession).filter(AttendanceSession.id == session_id).first()
+    if not session:
+        raise HTTPException(404, "Session not found.")
+    if current_user["role"] != "admin" and session.faculty_id != current_user["id"]:
+        raise HTTPException(403, "You can only end your own session.")
+    session.status = "ended"
+    session.end_time = datetime.now(timezone.utc)
+    db.commit()
+    return {"success": True}

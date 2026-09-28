@@ -13,6 +13,7 @@ import {
 } from "../types/attendance";
 import { initialAttendanceRecords, initialAuditLogs, generateSeedAttendanceRecords } from "../utils/seedData";
 import { verifyPlatformBiometrics } from "../utils/webauthnBiometrics";
+import { useAuth } from "./AuthContext";
 import { io } from "socket.io-client";
 
 interface AttendanceContextType {
@@ -97,6 +98,7 @@ interface AttendanceContextType {
 const AttendanceContext = createContext<AttendanceContextType | undefined>(undefined);
 
 export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { currentUser } = useAuth();
   const [activeSession, setActiveSession] = useState<AttendanceSession | null>(() => {
     const saved = localStorage.getItem("sbit_active_session");
     if (saved) {
@@ -153,7 +155,7 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     } else {
       localStorage.removeItem("sbit_active_session");
     }
-  }, [activeSession]);
+  }, [activeSession, currentUser?.uid]);
 
   useEffect(() => {
     localStorage.setItem("sbit_attendance_records", JSON.stringify(attendanceRecords));
@@ -161,6 +163,12 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   // Real-time synchronization (Backend API + Supabase + Socket.io WebSockets)
   useEffect(() => {
+    if (!currentUser) {
+      setActiveSession(null);
+      setAttendanceRecords([]);
+      setQrToken("");
+      return;
+    }
     const fetchInitialData = async () => {
       let recordsLoaded = false;
 
@@ -270,7 +278,8 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     try {
       socket = io({
         path: '/socket.io',
-        transports: ['websocket', 'polling']
+        transports: ['websocket', 'polling'],
+        withCredentials: true
       });
 
       socket.on('attendance:new', (entry: any) => {
@@ -329,9 +338,9 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return () => {
       if (socket) socket.disconnect();
     };
-  }, []);
+  }, [currentUser?.uid]);
 
-  const startSession = (data: {
+  const startSession = async (data: {
     sessionTitle?: string;
     facultyId: string;
     facultyName: string;
@@ -389,6 +398,7 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            durationMinutes: data.durationMinutes,
             sessionId: session.sessionId,
             rawToken: rawTokenId,
             facultyId: session.facultyId,
@@ -402,6 +412,7 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             radiusMeters: sessionRadius
           })
         });
+        if (!res.ok) throw new Error("Session could not be started. Please sign in again.");
         if (res.ok) {
           const resData = await res.json();
           if (resData.session) {
@@ -409,20 +420,18 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             const officialUrl = `${origin}/checkin?token=${backendTok}`;
             session.qrToken = officialUrl;
             session.currentRotationToken = officialUrl;
-            setActiveSession({ ...session, qrToken: officialUrl, currentRotationToken: officialUrl });
+            setActiveSession({ ...session, sessionId: resData.session.sessionId, endTime: new Date(resData.session.expiresAt).toISOString(), qrToken: officialUrl, currentRotationToken: officialUrl });
+            setRotationCountdown(resData.rotationRemaining);
+            setSessionCountdown(resData.secondsRemaining);
             setQrToken(officialUrl);
           }
         }
       } catch (err) {
-        console.warn("Backend session start notice:", err);
+        alert(err instanceof Error ? err.message : "Session could not be started.");
+        throw err;
       }
     };
-    startBackendSession();
-
-    setActiveSession(session);
-    setQrToken(newToken);
-    setRotationCountdown(60);
-    setSessionCountdown(data.durationMinutes * 60);
+    await startBackendSession();
 
     setAuditLogs(prev => [
       {
@@ -437,8 +446,15 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     ]);
   };
 
-  const terminateSession = () => {
+  const terminateSession = async () => {
     if (!activeSession) return;
+    try {
+      const response = await fetch(`/api/qr-session/${activeSession.sessionId}/end`, { method: "POST", credentials: "include" });
+      if (!response.ok) throw new Error("Session could not be ended.");
+    } catch {
+      alert("Could not end the session on the server. Please retry.");
+      return;
+    }
 
 
 
@@ -898,40 +914,40 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   // Periodic polling for real-time live synchronization
   useEffect(() => {
+    if (!currentUser) return;
     const liveInterval = setInterval(() => {
       refreshLiveAttendance();
     }, 5000);
     return () => clearInterval(liveInterval);
-  }, [activeSession]);
+  }, [activeSession, currentUser?.uid]);
 
   useEffect(() => {
     if (!activeSession) return;
 
-    const timer = setInterval(() => {
-      setRotationCountdown(prev => {
-        if (prev <= 1) {
-          // Always encode a full URL so the QR scan opens the check-in page
-          const rawId = crypto.randomUUID();
-          const token = `${window.location.origin}/checkin?token=${rawId}`;
-          setQrToken(token);
-          setActiveSession(session =>
-            session
-              ? {
-                  ...session,
-                  qrToken: token,
-                  currentRotationToken: token
-                }
-              : null
-          );
-          return 60;
+    let cancelled = false;
+    const refreshToken = async () => {
+      try {
+        const response = await fetch('/api/qr-session/current', { credentials: 'include' });
+        if (cancelled) return;
+        if ([401, 403, 404].includes(response.status)) {
+          setActiveSession(null);
+          setQrToken("");
+          return;
         }
-        return prev - 1;
-      });
-
-      setSessionCountdown(prev => (prev > 0 ? prev - 1 : 0));
+        if (!response.ok) return;
+        const data = await response.json();
+        if (cancelled || data.session.sessionId !== activeSession.sessionId) return;
+        setQrToken(`${window.location.origin}${data.checkinUrl}`);
+        setRotationCountdown(data.rotationRemaining);
+        setSessionCountdown(data.secondsRemaining);
+      } catch { /* Keep the displayed QR; the server still enforces expiry. */ }
+    };
+    const refresh = setInterval(refreshToken, 5000);
+    const timer = setInterval(() => {
+      setRotationCountdown(prev => Math.max(0, prev - 1));
+      setSessionCountdown(prev => Math.max(0, prev - 1));
     }, 1000);
-
-    return () => clearInterval(timer);
+    return () => { cancelled = true; clearInterval(timer); clearInterval(refresh); };
   }, [activeSession?.sessionId]);
 
   const seedDemoAttendance = () => {

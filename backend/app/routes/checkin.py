@@ -29,16 +29,16 @@ from app.models.db_models import (
     StudentFaceEmbedding,
     GeofenceConfig
 )
-from app.routes.qr_session import current_session, valid_session_tokens
+from app.routes.qr_session import resolve_session
 from app.routes.student_face import student_face_cache
 from app.utils.geofence import current_geofence, calculate_haversine_distance
-from app.utils.face_matcher import compare_face_embeddings
+from app.utils.face_matcher import compare_face_embeddings, valid_face_vector
 from app.utils.blink_detection import verify_live_blink
 from app.database import get_db, get_db_context
-from app.dependencies.auth import verify_edge_key, get_current_user, get_optional_current_user, require_role
+from app.dependencies.auth import verify_edge_key, get_current_user, get_optional_current_user, require_role, require_student_report
 from app.routes.auth import _rate_limit
 from app.services.face_recognition_service import face_service
-from app.utils.redis_client import set_otp, get_otp, delete_otp
+from app.utils.redis_client import set_otp, get_otp, delete_otp, consume_otp
 from app.services.redis_queue import (
     get_cached_student_status,
     set_cached_student_status,
@@ -86,188 +86,29 @@ def _load_enrolled_face_descriptor(hall_ticket: str) -> Optional[List[float]]:
     if not normalized_ht:
         return None
 
-    try:
-        with get_db_context() as db:
-            # 1. Check students table
-            student = (
-                db.query(Student)
-                .filter(func.upper(Student.hall_ticket_no) == normalized_ht)
-                .first()
-            )
-            if student and student.face_descriptor and isinstance(student.face_descriptor, list) and len(student.face_descriptor) in (128, 512):
-                logger.info(f"[Face] Loaded enrolled descriptor from PostgreSQL students for {normalized_ht}")
-                return student.face_descriptor
-
-            # 2. Check student_face_embeddings table
-            emb = (
-                db.query(StudentFaceEmbedding)
-                .filter(func.upper(StudentFaceEmbedding.hall_ticket_no) == normalized_ht)
-                .first()
-            )
-            if emb and emb.embedding_vector and isinstance(emb.embedding_vector, list) and len(emb.embedding_vector) in (128, 512):
-                logger.info(f"[Face] Loaded enrolled descriptor from PostgreSQL student_face_embeddings for {normalized_ht}")
-                return emb.embedding_vector
-    except Exception as e:
-        logger.warning(f"Error fetching enrolled descriptor from PostgreSQL: {e}")
-
-    for key in (normalized_ht, normalized_ht.lower()):
-        cached = student_face_cache.get(key)
-        if cached:
-            desc_val = cached.get("descriptor")
-            if desc_val and len(desc_val) in (128, 512):
-                logger.info(f"[Face] Loaded enrolled descriptor from cache for {normalized_ht}")
-                return desc_val
-
+    with get_db_context() as db:
+        student = db.query(Student).filter(func.upper(Student.hall_ticket_no) == normalized_ht).first()
+        if (student and student.status == "approved"
+                and student.face_enrollment_status == "enrolled"
+                and valid_face_vector(student.face_descriptor)):
+            return student.face_descriptor
+    # A revoked/missing database enrollment must never be resurrected from a cache.
     return None
 
 
 @router.get("/api/checkin/session/{token:path}")
 def validate_checkin_session(token: str, db: Session = Depends(get_db)):
-    """
-    Public check-in endpoint: Student's phone camera scans QR code
-    and this validates the session token.
-    Supports active token ring buffer, database sessions, and active classroom fallback.
-    """
-    clean_token = _extract_raw_token(token) if token else ""
-
-    # --- Strategy 1: Check in-memory active session & tokens ---
-    if clean_token and clean_token in valid_session_tokens:
-        s_data = valid_session_tokens[clean_token]
-        session_lat = s_data.get("faculty_lat") or current_geofence["center_lat"]
-        session_lng = s_data.get("faculty_lng") or current_geofence["center_lng"]
-        radius_m = s_data.get("radius_meters") or 150
-        return {
-            "valid": True,
-            "session": {
-                "sessionId": s_data.get("sessionId", "active_session"),
-                "sessionTitle": s_data.get("sessionTitle", "Academic Session"),
-                "facultyName": s_data.get("facultyName", "Faculty Member"),
-                "branch": s_data.get("branch", "CSE"),
-                "section": s_data.get("section", "A"),
-                "room": s_data.get("room", "Innovation Centre Lab"),
-                "faculty_lat": session_lat,
-                "faculty_lng": session_lng,
-                "radius_meters": radius_m
-            },
-            "geofence": {
-                "centerLat": session_lat,
-                "centerLng": session_lng,
-                "radiusMeters": radius_m
-            }
-        }
-
-    # --- Strategy 2: Check active sessions in PostgreSQL by qr_token or session UUID ---
-    try:
-        s = None
-        if clean_token:
-            try:
-                clean_uuid = uuid.UUID(clean_token)
-                s = db.query(AttendanceSession).filter(
-                    AttendanceSession.id == clean_uuid,
-                    AttendanceSession.status == "active"
-                ).first()
-            except (ValueError, TypeError):
-                pass
-
-            if not s:
-                s = db.query(AttendanceSession).filter(
-                    AttendanceSession.qr_token == clean_token,
-                    AttendanceSession.status == "active"
-                ).first()
-
-        # Strategy 3: Active classroom session recovery within 4-hour window
-        if not s:
-            now_utc = datetime.now(timezone.utc)
-            cutoff = now_utc - timedelta(hours=4)
-            s = (
-                db.query(AttendanceSession)
-                .filter(
-                    AttendanceSession.status == "active",
-                    or_(AttendanceSession.end_time == None, AttendanceSession.end_time > now_utc, AttendanceSession.created_at >= cutoff)
-                )
-                .order_by(desc(AttendanceSession.created_at))
-                .first()
-            )
-
-        if s:
-            geo = s.geofence or {}
-            session_lat = geo.get("lat") or current_geofence["center_lat"]
-            session_lng = geo.get("lng") or current_geofence["center_lng"]
-            radius_m = s.radius_meters or 150
-            return {
-                "valid": True,
-                "session": {
-                    "sessionId": str(s.id),
-                    "sessionTitle": s.session_title,
-                    "facultyName": s.faculty_name,
-                    "branch": s.branch,
-                    "section": s.section,
-                    "room": s.room,
-                    "faculty_lat": session_lat,
-                    "faculty_lng": session_lng,
-                    "radius_meters": radius_m
-                },
-                "geofence": {
-                    "centerLat": session_lat,
-                    "centerLng": session_lng,
-                    "radiusMeters": radius_m
-                }
-            }
-    except Exception as e:
-        logger.warning(f"PostgreSQL session check note: {e}")
-
-    # --- Strategy 4: JWT token validation ---
-    if clean_token:
-        try:
-            decoded = jwt.decode(clean_token, JWT_SECRET, algorithms=["HS256"])
-            sess_id = decoded.get("sessionId")
-            if sess_id:
-                s_obj = None
-                try:
-                    s_obj = db.query(AttendanceSession).filter(
-                        AttendanceSession.id == uuid.UUID(sess_id),
-                        AttendanceSession.status == "active"
-                    ).first()
-                except Exception:
-                    pass
-
-                sess_title = s_obj.session_title if s_obj else "Campus Academic Session"
-                fac_name = s_obj.faculty_name if s_obj else decoded.get("facultyId", "Faculty")
-                branch = s_obj.branch if s_obj else decoded.get("branch", "CSE")
-                section = s_obj.section if s_obj else decoded.get("section", "A")
-                room = s_obj.room if s_obj else "Innovation Centre Lab"
-                sess_geo = (s_obj.geofence or {}) if s_obj else {}
-                session_lat = sess_geo.get("lat") or current_geofence["center_lat"]
-                session_lng = sess_geo.get("lng") or current_geofence["center_lng"]
-                radius_m = s_obj.radius_meters if s_obj and s_obj.radius_meters else current_geofence["radius_m"]
-
-                return {
-                    "valid": True,
-                    "session": {
-                        "sessionId": sess_id,
-                        "sessionTitle": sess_title,
-                        "facultyName": fac_name,
-                        "branch": branch,
-                        "section": section,
-                        "room": room,
-                        "faculty_lat": session_lat,
-                        "faculty_lng": session_lng,
-                        "radius_meters": radius_m
-                    },
-                    "geofence": {
-                        "centerLat": session_lat,
-                        "centerLng": session_lng,
-                        "radiusMeters": radius_m
-                    }
-                }
-        except Exception:
-            pass
-
-    # Fail closed: No valid active session was matched for this token
-    raise HTTPException(
-        status_code=404,
-        detail="No active session found for this QR token or code has expired."
-    )
+    session = resolve_session(_extract_raw_token(token), db)
+    geo = session.geofence or {}
+    lat = geo.get("lat", current_geofence["center_lat"])
+    lng = geo.get("lng", current_geofence["center_lng"])
+    radius = session.radius_meters
+    return {"valid": True, "session": {
+        "sessionId": str(session.id), "sessionTitle": session.session_title,
+        "facultyName": session.faculty_name, "branch": session.branch,
+        "section": session.section, "room": session.room,
+        "faculty_lat": lat, "faculty_lng": lng, "radius_meters": radius},
+        "geofence": {"centerLat": lat, "centerLng": lng, "radiusMeters": radius}}
 
 
 @router.get("/api/student/check-status/{hall_ticket}")
@@ -282,9 +123,6 @@ def get_student_enrollment_status(request: Request, hall_ticket: str, db: Sessio
         raise HTTPException(status_code=400, detail="Invalid Hall Ticket format. Must be 10 characters starting with '2'.")
 
     # Fast-path: Check high-performance Redis cache first (60s TTL)
-    cached = get_cached_student_status(ht)
-    if cached:
-        return cached
 
     student_name = f"Student ({ht})"
     branch = "CSE"
@@ -315,55 +153,12 @@ def get_student_enrollment_status(request: Request, hall_ticket: str, db: Sessio
 
     is_face_enrolled = bool(enrolled_desc and isinstance(enrolled_desc, list) and len(enrolled_desc) in (128, 512))
 
-    # P1-1: No in-memory cache — query Postgres directly for today's records.
-    already_marked_record = None
-
-    if not already_marked_record:
-        try:
-            today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-            rec = (
-                db.query(AttendanceRecord)
-                .filter(func.upper(AttendanceRecord.hall_ticket_no) == ht)
-                .filter(AttendanceRecord.marked_at >= today_start)
-                .order_by(desc(AttendanceRecord.marked_at))
-                .first()
-            )
-            if rec:
-                already_marked_record = {
-                    "id": str(rec.id),
-                    "sessionId": str(rec.session_id) if rec.session_id else None,
-                    "hallTicketNo": ht,
-                    "studentName": rec.student_name or student_name,
-                    "markedAt": rec.marked_at.isoformat() if rec.marked_at else None,
-                    "status": rec.status or "present",
-                    "verificationMethod": rec.verification_method or "face_recognition"
-                }
-        except Exception as e:
-            logger.warning(f"Check already marked note: {e}")
-
-    profile = {
-        "name": student_name,
-        "hallTicketNo": ht,
-        "branch": branch,
-        "section": section,
-        "year": year,
-        "faceEnrolled": is_face_enrolled,
-        "biometricEnrolled": is_bio_enrolled,
-        "faceDescriptor": None  # SECURITY: Never return raw biometric descriptors
-    }
-    # P1-1: No in-memory cache — return directly from DB query.
-
     result = {
-        "hallTicketNo": ht,
-        "isRegistered": True,
-        "isFaceEnrolled": is_face_enrolled,
-        "isBiometricEnrolled": is_bio_enrolled,
-        "faceDescriptor": None,  # SECURITY: Never return raw biometric descriptors
-        "isAlreadyMarked": already_marked_record is not None,
-        "alreadyMarkedRecord": already_marked_record,
-        "profile": profile
-    }
-    set_cached_student_status(ht, result, ttl=60)
+        "hallTicketNo": ht, "isRegistered": True,
+        "isFaceEnrolled": is_face_enrolled, "isBiometricEnrolled": is_bio_enrolled,
+        "isAlreadyMarked": False, "alreadyMarkedRecord": None,
+        "profile": {"hallTicketNo": ht, "faceEnrolled": is_face_enrolled,
+                    "biometricEnrolled": is_bio_enrolled}}
     return result
 
 
@@ -384,14 +179,8 @@ def reset_student_biometrics(
     # Authorization: admin/faculty may reset any student; students may only reset themselves
     caller_role = (current_user.get("role") or "student").lower()
     if caller_role not in ("admin", "faculty"):
-        caller_email = str(current_user.get("email") or "").lower()
-        caller_meta = current_user.get("payload") or {}
-        caller_ht = str(caller_meta.get("hall_ticket_no") or "").upper()
-        if caller_ht != ht and not caller_email.startswith(ht.lower() + "@"):
-            raise HTTPException(
-                status_code=403,
-                detail="Forbidden: You can only reset your own biometric profile."
-            )
+        if str(current_user.get("hall_ticket_no") or "").upper() != ht:
+            raise HTTPException(403, "You can only reset your own biometric profile.")
 
     student_face_cache.pop(ht, None)
     student_face_cache.pop(ht.lower(), None)
@@ -405,6 +194,8 @@ def reset_student_biometrics(
             student.face_enrollment_status = "pending"
             student.face_enrolled_at = None
             student.biometric_credential_id = None
+            student.biometric_public_key = None
+            student.biometric_sign_count = 0
             student.biometric_enrollment_status = "pending"
             student.biometric_enrolled_at = None
             student.updated_at = datetime.now(timezone.utc)
@@ -451,6 +242,8 @@ def clear_all_registered_biometrics(db: Session = Depends(get_db)):
             s.face_enrollment_status = "pending"
             s.face_enrolled_at = None
             s.biometric_credential_id = None
+            s.biometric_public_key = None
+            s.biometric_sign_count = 0
             s.biometric_enrollment_status = "pending"
             s.biometric_enrolled_at = None
             s.updated_at = now_dt
@@ -548,11 +341,15 @@ def register_student_biometrics(
                 status_code=403,
                 detail="This enrollment token has already been used. Please request a new verification code."
             )
-        # Mark as consumed with 1-hour TTL
-        set_otp(f"used_enrollment:{token_hash}", "1", ttl_seconds=3600)
+
+    approved_student = db.query(Student).filter(Student.hall_ticket_no == ht).with_for_update().first()
+    if not approved_student or approved_student.status != "approved":
+        raise HTTPException(403, "An approved student account is required.")
 
     face_descriptor = payload.get("faceDescriptor")
-    bio_credential_id = payload.get("biometricCredentialId")
+    if not valid_face_vector(face_descriptor):
+        raise HTTPException(400, "A finite nonzero 128-D or 512-D face descriptor is required.")
+    bio_credential_id = approved_student.biometric_credential_id
     student_name = payload.get("name") or f"Student ({ht})"
     branch = payload.get("branch") or "CSE"
     section = payload.get("section") or "A"
@@ -562,28 +359,13 @@ def register_student_biometrics(
             raise HTTPException(status_code=400, detail="faceDescriptor must be a 128-dimensional or 512-dimensional float list.")
 
         # SECURITY: Prevent public re-enrollment when a face is already enrolled.
-        existing_descriptor = _load_enrolled_face_descriptor(ht)
+        existing_descriptor = approved_student.face_descriptor
         if existing_descriptor and isinstance(existing_descriptor, list) and len(existing_descriptor) in (128, 512):
             logger.warning(f"[Security] Blocked public re-enrollment attempt for {ht} — face already enrolled. Use reset-biometrics first.")
             raise HTTPException(
                 status_code=409,
                 detail=f"Face biometrics are already enrolled for {ht}. To re-register, use the 'Re-enroll Face' option first or contact your faculty."
             )
-
-        now_iso = datetime.now(timezone.utc).isoformat()
-        student_face_cache[ht] = {
-            "descriptor": face_descriptor,
-            "updatedAt": now_iso
-        }
-        try:
-            face_service.register_embedding(
-                hall_ticket=ht,
-                vector=face_descriptor,
-                name=student_name,
-                student_id=ht
-            )
-        except Exception as svc_err:
-            logger.warning(f"Note on face_service registration: {svc_err}")
 
     profile_dict = {
         "name": student_name,
@@ -606,10 +388,7 @@ def register_student_biometrics(
         student.face_descriptor = face_descriptor
         student.face_enrollment_status = "enrolled" if face_descriptor else "pending"
         student.face_enrolled_at = now_dt if face_descriptor else None
-        student.biometric_credential_id = bio_credential_id
-        student.biometric_enrollment_status = "enrolled" if bio_credential_id else "pending"
-        student.biometric_enrolled_at = now_dt if bio_credential_id else None
-        student.status = "approved"
+        # Passkeys are persisted only by the cryptographic WebAuthn endpoint.
         student.updated_at = now_dt
 
         # Update student_face_embeddings
@@ -642,8 +421,14 @@ def register_student_biometrics(
     except HTTPException:
         raise
     except Exception as e:
+        db.rollback()
         logger.warning(f"PostgreSQL student biometric update note: {e}")
         raise HTTPException(status_code=500, detail="Could not persist student biometrics. Please try again.")
+
+    if not is_staff:
+        set_otp(f"used_enrollment:{token_hash}", "1", ttl_seconds=3600)
+    student_face_cache[ht] = {"descriptor": face_descriptor, "updatedAt": now_dt.isoformat()}
+    face_service.register_embedding(ht, face_descriptor, student.name, str(student.id))
 
     return {
         "success": True,
@@ -653,7 +438,7 @@ def register_student_biometrics(
 
 
 @router.get("/api/student/records/{hall_ticket}")
-def get_student_attendance_history(hall_ticket: str, db: Session = Depends(get_db)):
+def get_student_attendance_history(hall_ticket: str, db: Session = Depends(get_db), current_user=Depends(require_student_report)):
     """
     Public and Staff Attendance Check:
     Retrieves real student details from PostgreSQL along with true attendance statistics and session records.
@@ -777,94 +562,20 @@ async def verify_student_checkin(
     session_lng = current_geofence["center_lng"]
     session_radius = 150
 
-    # 1. Validate session token with extended grace & multi-tier resolution
-    normalized_token = _extract_raw_token(payload.token) if payload.token else ""
-
-    # Strategy 1: Check token history ring buffer
-    if normalized_token and normalized_token in valid_session_tokens:
-        s_data = valid_session_tokens[normalized_token]
-        session_id = s_data.get("sessionId", "active_session")
-        session_title = s_data.get("sessionTitle", session_title)
-        branch = s_data.get("branch", branch)
-        section = s_data.get("section", section)
-        session_lat = s_data.get("faculty_lat") or session_lat
-        session_lng = s_data.get("faculty_lng") or session_lng
-        session_radius = s_data.get("radius_meters") or session_radius
-    # Strategy 2: Check current_session
-    elif current_session and (normalized_token == current_session.get("raw_token") or normalized_token == current_session.get("token") or payload.token == current_session.get("raw_token") or payload.token == current_session.get("token")):
-        session_id = current_session.get("sessionId")
-        session_title = current_session.get("sessionTitle", session_title)
-        branch = current_session.get("branch", branch)
-        section = current_session.get("section", section)
-        session_lat = current_session.get("faculty_lat") or session_lat
-        session_lng = current_session.get("faculty_lng") or session_lng
-        session_radius = current_session.get("radius_meters") or session_radius
-    else:
-        # Strategy 3: Check PostgreSQL active sessions
-        try:
-            s = None
-            if normalized_token:
-                try:
-                    clean_uuid = uuid.UUID(normalized_token)
-                    s = db.query(AttendanceSession).filter(
-                        AttendanceSession.id == clean_uuid,
-                        AttendanceSession.status == "active"
-                    ).first()
-                except (ValueError, TypeError):
-                    pass
-
-                if not s:
-                    s = db.query(AttendanceSession).filter(
-                        AttendanceSession.qr_token == normalized_token,
-                        AttendanceSession.status == "active"
-                    ).first()
-
-            # Strategy 3b: Active classroom session recovery within 4-hour window
-            if not s:
-                now_utc = datetime.now(timezone.utc)
-                cutoff = now_utc - timedelta(hours=4)
-                s = (
-                    db.query(AttendanceSession)
-                    .filter(
-                        AttendanceSession.status == "active",
-                        or_(AttendanceSession.end_time == None, AttendanceSession.end_time > now_utc, AttendanceSession.created_at >= cutoff)
-                    )
-                    .order_by(desc(AttendanceSession.created_at))
-                    .first()
-                )
-
-            if s:
-                session_id = str(s.id)
-                session_title = s.session_title or session_title
-                branch = s.branch or branch
-                section = s.section or section
-                geo = s.geofence or {}
-                session_lat = geo.get("lat") or session_lat
-                session_lng = geo.get("lng") or session_lng
-                session_radius = s.radius_meters or session_radius
-        except Exception as e:
-            db.rollback()
-            logger.warning(f"PostgreSQL session check note: {e}")
-
-        # Strategy 4: Try JWT decode
-        if not session_id and normalized_token:
-            try:
-                decoded = jwt.decode(normalized_token, JWT_SECRET, algorithms=["HS256"])
-                session_id = decoded.get("sessionId")
-                branch = decoded.get("branch", branch)
-                section = decoded.get("section", section)
-            except Exception:
-                pass
-
-        # If no valid, unexpired session token is found, fail closed — do not synthesize a session
-        if not session_id:
-            raise HTTPException(
-                status_code=403,
-                detail="Invalid or expired session token. A valid check-in session is required."
-            )
+    session = resolve_session(_extract_raw_token(payload.token), db)
+    session_id = str(session.id)
+    session_title = session.session_title
+    branch, section = session.branch, session.section
+    geo = session.geofence or {}
+    session_lat = geo.get("lat", session_lat)
+    session_lng = geo.get("lng", session_lng)
+    session_radius = session.radius_meters
+    student = db.query(Student).filter(Student.hall_ticket_no == hall_ticket).first()
+    if not student or student.status != "approved":
+        raise HTTPException(403, "An approved student account is required.")
 
     # Reject if GPS coordinates are missing — do not backfill with session location
-    if not payload.lat or not payload.lng:
+    if payload.lat is None or payload.lng is None:
         raise HTTPException(status_code=400, detail="GPS coordinates (lat/lng) are required for geofence verification.")
 
     student_lat = payload.lat
@@ -925,21 +636,10 @@ async def verify_student_checkin(
             session_lat,
             session_lng
         )
-        campus_lat = geofence_cfg.center_lat if geofence_cfg else current_geofence.get("center_lat", 17.2472)
-        campus_lng = geofence_cfg.center_lng if geofence_cfg else current_geofence.get("center_lng", 80.1514)
-        campus_dist_m = calculate_haversine_distance(
-            payload.lat,
-            payload.lng,
-            campus_lat,
-            campus_lng
-        )
-        # Check if student is within session radius (+ 200m buffer for indoor GPS jitter)
-        # OR within 5km of campus / session (to support campus testing & classroom variance)
-        max_session_dist = max(session_radius + 200, 350)
-        if distance_m > max_session_dist and campus_dist_m > 5000 and distance_m > 5000:
+        if distance_m > session_radius:
             raise HTTPException(
                 status_code=403,
-                detail=f"Outside the allowed check-in radius (measured {distance_m}m from session, allowed {session_radius}m)."
+                detail=f"Outside allowed check-in radius: {distance_m}m from session (allowed: {session_radius}m)."
             )
 
     # 4. Face Recognition & Liveness Matching
@@ -990,19 +690,21 @@ async def verify_student_checkin(
         face_distance = 0.0
 
     capture_hash_val = None
-    if payload.faceDescriptor is not None:
+    if not server_biometric_verified and payload.faceDescriptor is not None:
         if len(payload.faceDescriptor) not in (128, 512):
             raise HTTPException(status_code=400, detail="faceDescriptor must be a 128- or 512-dimensional float list.")
 
         # Single-use liveness challenge nonce verification
+        if not payload.challengeToken:
+            raise HTTPException(403, "A fresh liveness challenge is required.")
         if payload.challengeToken:
-            stored_challenge = get_otp(f"checkin_challenge:{payload.challengeToken}")
+            stored_challenge = consume_otp(f"checkin_challenge:{payload.challengeToken}")
             if not stored_challenge:
                 raise HTTPException(
                     status_code=403,
                     detail="Liveness challenge token is invalid or expired. Please capture a fresh scan."
                 )
-            delete_otp(f"checkin_challenge:{payload.challengeToken}")
+
 
         # Live camera frame snapshot validation & hash binding
         if payload.captureImage:
@@ -1043,7 +745,7 @@ async def verify_student_checkin(
                 detail=f"Blink liveness verification failed: {blink_result.reason}"
             )
 
-        enrolled_descriptor = _load_enrolled_face_descriptor(hall_ticket)
+        enrolled_descriptor = student.face_descriptor if student.face_enrollment_status == "enrolled" else None
         if not enrolled_descriptor:
             raise HTTPException(
                 status_code=403,
@@ -1079,7 +781,7 @@ async def verify_student_checkin(
             )
 
         verification_method = "face_recognition"
-    else:
+    elif not server_biometric_verified:
         raise HTTPException(
             status_code=400,
             detail="faceDescriptor is required for facial check-in. Please use the face enrollment flow or biometric fallback."
@@ -1109,27 +811,8 @@ async def verify_student_checkin(
 
     now_dt = datetime.now(timezone.utc)
     try:
-        # Ensure attendance_session exists; if missing, create it.
-        sess_chk = db.query(AttendanceSession).filter_by(id=session_uuid).first()
-        if not sess_chk:
-            new_sess = AttendanceSession(
-                id=session_uuid,
-                session_title=session_title,
-                faculty_id="faculty_201",
-                faculty_name="Faculty Member",
-                branch=branch,
-                section=section,
-                room="Innovation Centre Lab",
-                start_time=now_dt,
-                end_time=now_dt + timedelta(hours=2),
-                status="active",
-                qr_token=normalized_token or str(uuid.uuid4()),
-                radius_meters=session_radius,
-                geofence={"lat": session_lat, "lng": session_lng}
-            )
-            db.add(new_sess)
-            # Flush to get the session id before inserting the record.
-            db.flush()
+        # Recheck lifetime immediately before writing; never synthesize a session.
+        resolve_session(_extract_raw_token(payload.token), db)
 
         # Now create and persist the attendance record.
         new_rec = AttendanceRecord(
@@ -1209,7 +892,7 @@ async def verify_student_checkin(
 
 
 @router.get("/api/attendance/today")
-def get_today_attendance(db: Session = Depends(get_db)):
+def get_today_attendance(db: Session = Depends(get_db), current_user=Depends(require_role(["admin", "faculty"]))):
     """
     Initial table load for the Live Attendance dashboard from PostgreSQL.
     """

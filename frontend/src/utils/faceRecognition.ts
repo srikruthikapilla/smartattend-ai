@@ -4,8 +4,17 @@ import * as faceapi from "face-api.js";
  * Load face-api.js neural network models from local /models or fallback CDN.
  */
 let modelsLoaded = false;
+let modelLoad: Promise<boolean> | null = null;
 
-export async function loadFaceApiModels(): Promise<boolean> {
+export function loadFaceApiModels(): Promise<boolean> {
+  if (!modelLoad) modelLoad = loadModelsOnce().then(loaded => {
+    if (!loaded) modelLoad = null;
+    return loaded;
+  });
+  return modelLoad;
+}
+
+async function loadModelsOnce(): Promise<boolean> {
   if (modelsLoaded) return true;
 
   const paths = [
@@ -35,12 +44,17 @@ export async function loadFaceApiModels(): Promise<boolean> {
  * Calculates Euclidean distance between two 128-dimensional descriptors.
  * Normalizes both descriptors to L2 unit length to guarantee scale invariance.
  */
+export function validFaceDescriptor(value: number[]): boolean {
+  return Array.isArray(value) && [128, 512].includes(value.length)
+    && value.every(Number.isFinite) && Math.hypot(...value) > 1e-8;
+}
+
 export function calculateFaceDistance(
   desc1: number[],
   desc2: number[]
 ): number {
-  if (!desc1 || !desc2 || desc1.length !== desc2.length) {
-    return 1.0;
+  if (!validFaceDescriptor(desc1) || !validFaceDescriptor(desc2) || desc1.length !== desc2.length) {
+    return Infinity;
   }
 
   let norm1 = 0;
@@ -69,6 +83,7 @@ export function calculateFaceDistance(
  * - Impostor/Mismatch (distance > 0.30): drops sharply from 65% down to 0%.
  */
 export function calculateConfidencePct(distance: number, threshold = 0.48): number {
+  if (!Number.isFinite(distance)) return 0;
   if (distance <= threshold) {
     const pct = 100 - (distance / threshold) * 20;
     return Math.max(80, Math.min(100, Math.round(pct)));
@@ -313,30 +328,6 @@ export class BlinkDetector {
 }
 
 /**
- * Fallback generator: creates a deterministic 128-D vector from canvas frame
- */
-export function generateCanvasFallbackDescriptor(video: HTMLVideoElement): number[] {
-  const canvas = document.createElement('canvas');
-  canvas.width = 64;
-  canvas.height = 64;
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    ctx.drawImage(video, 0, 0, 64, 64);
-    const imgData = ctx.getImageData(0, 0, 64, 64).data;
-    const vector = new Array(128).fill(0);
-    for (let i = 0; i < imgData.length; i += 4) {
-      const idx = (i / 4) % 128;
-      const brightness = (imgData[i] * 0.299 + imgData[i+1] * 0.587 + imgData[i+2] * 0.114) / 255;
-      vector[idx] += brightness;
-    }
-    // Normalize L2
-    const norm = Math.sqrt(vector.reduce((a, b) => a + b * b, 0)) || 1;
-    return vector.map(v => Number((v / norm).toFixed(4)));
-  }
-  return Array.from({ length: 128 }, () => Number((Math.random() * 0.1).toFixed(4)));
-}
-
-/**
  * Extract real 128-dimensional face descriptor and landmarks from video element.
  * Enforces single-face detection to reject background faces and multiple individuals.
  */
@@ -493,91 +484,34 @@ export async function captureEnrollmentDescriptor(
   video: HTMLVideoElement,
   onProgress: (p: EnrollmentProgress) => void,
   totalFrames = 8,
-  intervalMs = 500
+  intervalMs = 500,
+  signal?: AbortSignal
 ): Promise<number[] | null> {
   const collected: number[][] = [];
-  let attempt = 0;
-  const maxAttempts = totalFrames * 6; // allow more retries if detection misses
-
-  onProgress({ framesCollected: 0, totalFrames, pct: 0, status: 'scanning', message: 'Keep still — scanning your face...' });
-
-  const ready = await waitForVideoReady(video);
-  if (!ready) {
-    onProgress({
-      framesCollected: 0,
-      totalFrames,
-      pct: 0,
-      status: 'error',
-      message: 'Camera is not ready yet. Please allow camera access and keep your face centered.'
-    });
+  if (!await waitForVideoReady(video) || signal?.aborted) return null;
+  for (let attempt = 0; attempt < totalFrames * 6 && collected.length < totalFrames; attempt++) {
+    if (signal?.aborted) return null;
+    const result = await detectFaceWithLandmarks(video);
+    if (signal?.aborted) return null;
+    if (!result || result.multipleFaces || result.isCentered === false) {
+      collected.length = 0;
+      onProgress({ framesCollected: 0, totalFrames, pct: 0, status: 'scanning', message: 'Keep one face centered and visible.' });
+    } else if (validFaceDescriptor(result.descriptor)) {
+      if (collected.length && calculateFaceDistance(collected[0], result.descriptor) > 0.48) {
+        collected.length = 0;
+      }
+      collected.push(result.descriptor);
+      onProgress({ framesCollected: collected.length, totalFrames, pct: Math.round(collected.length / totalFrames * 90), status: 'scanning', message: 'Hold steady while your face is captured.' });
+    }
+    if (collected.length < totalFrames) await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  if (signal?.aborted) return null;
+  if (collected.length < totalFrames) {
+    onProgress({ framesCollected: collected.length, totalFrames, pct: 0, status: 'error', message: 'Could not capture a consistent face. Please retry in good lighting.' });
     return null;
   }
-
-  return new Promise((resolve) => {
-    const interval = setInterval(async () => {
-      if (collected.length >= totalFrames) {
-        clearInterval(interval);
-        onProgress({ framesCollected: collected.length, totalFrames, pct: 95, status: 'processing', message: 'Building your face profile...' });
-
-        // Select the Medoid descriptor to preserve sharp individual facial landmarks
-        const template = computeMedoidDescriptor(collected);
-
-        onProgress({ framesCollected: collected.length, totalFrames, pct: 100, status: 'done', message: 'Face profile registered!' });
-        resolve(template);
-        return;
-      }
-
-      attempt++;
-      if (attempt > maxAttempts) {
-        clearInterval(interval);
-        if (collected.length >= 3) {
-          // Enough high-confidence frames to proceed
-          onProgress({ framesCollected: collected.length, totalFrames, pct: 95, status: 'processing', message: 'Building your face profile...' });
-          const template = computeMedoidDescriptor(collected);
-          onProgress({ framesCollected: collected.length, totalFrames, pct: 100, status: 'done', message: 'Face profile registered!' });
-          resolve(template);
-        } else {
-          onProgress({ framesCollected: collected.length, totalFrames, pct: 0, status: 'error', message: 'Could not detect your face with sufficient confidence. Please ensure good lighting and only one person in frame.' });
-          resolve(null);
-        }
-        return;
-      }
-
-      try {
-        if (!video || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
-        const res = await detectFaceWithLandmarks(video);
-
-        if (res?.multipleFaces) {
-          onProgress({
-            framesCollected: collected.length,
-            totalFrames,
-            pct: Math.round((collected.length / totalFrames) * 90),
-            status: 'scanning',
-            message: `⚠️ Multiple faces detected (${res.faceCount} people). Please ensure only you are visible.`,
-            multipleFaces: true
-          });
-          return;
-        }
-
-        if (res && res.descriptor && res.descriptor.length === 128 && res.isCentered !== false) {
-          collected.push(res.descriptor);
-          const pct = Math.round((collected.length / totalFrames) * 90);
-          const messages = [
-            'Keep still — scanning your face...',
-            'Hold steady...',
-            'Scanning facial landmarks...',
-            'Almost there — keep looking at camera...',
-            'Great — a few more seconds...',
-            'Perfect — finishing up...',
-          ];
-          const msg = messages[Math.min(collected.length - 1, messages.length - 1)];
-          onProgress({ framesCollected: collected.length, totalFrames, pct, status: 'scanning', message: msg });
-        }
-      } catch {
-        // Silently retry on frame error
-      }
-    }, intervalMs);
-  });
+  onProgress({ framesCollected: totalFrames, totalFrames, pct: 95, status: 'processing', message: 'Saving your face profile...' });
+  return computeMedoidDescriptor(collected);
 }
 
 /**

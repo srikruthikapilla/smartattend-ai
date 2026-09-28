@@ -1,4 +1,5 @@
 import { QRPayload, QRSession } from '../types/session';
+import { calculateDistance } from './gps';
 
 /**
  * Generates a dynamic 30-second rotation token for an active QR attendance session.
@@ -89,6 +90,32 @@ export function validateQRPayload(
       errorCode: 'OUTDATED_ROTATION',
       message: 'This QR code has already been rotated out. Screenshots/old codes are rejected.'
     };
+  }
+
+  // 5. QR-Embedded Geofence Verification
+  // The QR payload carries the session's geofence center + radius. Verify the
+  // scanned code's embedded location matches the active session's geofence.
+  // This prevents a QR from a different session being accepted by mistake.
+  if (payload.loc && activeSession.geofence) {
+    const qrLat = Number(payload.loc.lat);
+    const qrLng = Number(payload.loc.lng);
+    const qrRadius = Number(payload.loc.rad);
+    const sessionLat = Number(activeSession.geofence.lat);
+    const sessionLng = Number(activeSession.geofence.lng);
+    const sessionRadius = Number(activeSession.geofence.radiusMeters);
+
+    if (Number.isFinite(qrLat) && Number.isFinite(qrLng) && Number.isFinite(qrRadius)
+        && Number.isFinite(sessionLat) && Number.isFinite(sessionLng) && Number.isFinite(sessionRadius)) {
+      const centerDist = calculateDistance(qrLat, qrLng, sessionLat, sessionLng);
+      // Allow a small tolerance (50m) for GPS jitter between QR generation and scan.
+      if (centerDist > 50 || Math.abs(qrRadius - sessionRadius) > 50) {
+        return {
+          valid: false,
+          errorCode: 'INVALID_SESSION',
+          message: 'QR code geofence does not match the active session. Please scan the current live QR code.'
+        };
+      }
+    }
   }
 
   return {

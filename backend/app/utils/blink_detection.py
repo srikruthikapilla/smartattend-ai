@@ -86,11 +86,11 @@ def verify_blink_from_ear_history(ear_history: List[float]) -> ServerBlinkResult
       3. Recovery / reopening (recent EAR returns near or above baseline)
       4. Temporal sanity (rejects flat sequences, negative values, extreme noise)
     """
-    if not ear_history or len(ear_history) < 2:
+    if not ear_history or len(ear_history) < 3:
         return ServerBlinkResult(
             is_valid_blink=False,
             confidence=0.0,
-            reason="Insufficient EAR history samples (minimum 2 required)"
+            reason="Insufficient EAR history samples (minimum 3 required)"
         )
 
     # Convert to clean numpy float array
@@ -102,6 +102,9 @@ def verify_blink_from_ear_history(ear_history: List[float]) -> ServerBlinkResult
             confidence=0.0,
             reason="Invalid EAR sample data format"
         )
+
+    if ear_arr.ndim != 1 or len(ear_arr) > 120 or not np.isfinite(ear_arr).all():
+        return ServerBlinkResult(False, 0.0, "Invalid or excessive EAR samples")
 
     # 1. Biological sanity bounds check [0.05, 0.55]
     if np.any(ear_arr < 0.02) or np.any(ear_arr > 0.65):
@@ -143,6 +146,8 @@ def verify_blink_from_ear_history(ear_history: List[float]) -> ServerBlinkResult
     # or the last frame should have begun reopening
     min_idx = int(np.argmin(ear_arr))
     is_internal_trough = (0 < min_idx < len(ear_arr) - 1)
+    if not is_internal_trough or start_ear < 0.15 or start_ear - min_ear < 0.016:
+        return ServerBlinkResult(False, 0.0, "Blink must include open, closed, then reopened eyes")
     reopened = (cur_ear > min_ear + 0.010) or (cur_ear >= 0.15 and is_internal_trough) or (cur_ear > min_ear and len(ear_arr) <= 5)
 
     if not reopened and cur_ear <= min_ear + 0.006:
@@ -194,6 +199,14 @@ def verify_live_blink(
       2. If face_landmarks is provided: validates anatomical landmarks and checks instantaneous EAR.
       3. Cross-verifies with client declaration.
     """
+    if face_landmarks is not None:
+        try:
+            points = np.asarray(face_landmarks, dtype=float)
+            if points.shape != (68, 2) or not np.isfinite(points).all():
+                return ServerBlinkResult(False, 0.0, "Invalid facial landmarks")
+        except (TypeError, ValueError):
+            return ServerBlinkResult(False, 0.0, "Invalid facial landmarks")
+
     # 1. Landmark inspection if available
     landmark_ear: Optional[float] = None
     if face_landmarks and len(face_landmarks) >= 68:
@@ -208,14 +221,14 @@ def verify_live_blink(
             )
 
     # 2. Temporal EAR history analysis
-    if ear_history and len(ear_history) >= 2:
+    if ear_history and len(ear_history) >= 3:
         # If landmark EAR is also provided, ensure the history ends near the landmark EAR
         if landmark_ear is not None:
             # Append or reconcile current landmark EAR
             full_history = list(ear_history)
             if abs(full_history[-1] - landmark_ear) > 0.12:
                 # Discrepancy between reported landmark and EAR history
-                logger.warning(f"EAR history tail ({full_history[-1]:.3f}) differs from landmark EAR ({landmark_ear:.3f})")
+                return ServerBlinkResult(False, 0.0, "Landmarks do not match the blink history")
             result = verify_blink_from_ear_history(full_history)
         else:
             result = verify_blink_from_ear_history(ear_history)

@@ -30,7 +30,8 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode; allowedRoles: string
   children,
   allowedRoles
 }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, authLoading } = useAuth();
+  if (authLoading) return <div role="status" className="p-8">Loading session...</div>;
   if (!currentUser) return <Navigate to="/login" replace />;
   if (!allowedRoles.includes(currentUser.role)) {
     if (currentUser.role === 'admin') return <Navigate to="/admin/dashboard" replace />;
@@ -45,11 +46,12 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode; allowedRoles: string
  * Logged-in users are redirected to their role dashboard.
  */
 const PublicOnlyRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, authLoading } = useAuth();
+  if (authLoading) return <div role="status" className="p-8">Loading session...</div>;
   if (!currentUser) return <>{children}</>;
   if (currentUser.role === 'admin') return <Navigate to="/admin/dashboard" replace />;
   if (currentUser.role === 'faculty') return <Navigate to="/faculty/dashboard" replace />;
-  return <Navigate to="/login" replace />;
+  return <Navigate to="/student/dashboard" replace />;
 };
 
 // ─── Authenticated Shell Layout ─────────────────────────────────────────────
@@ -87,7 +89,8 @@ const AuthenticatedShell: React.FC<{ children: React.ReactNode }> = ({ children 
 // ─── App ───────────────────────────────────────────────────────────────────────
 
 export const App: React.FC = () => {
-  const { currentUser } = useAuth();
+  const { currentUser, authLoading } = useAuth();
+  if (authLoading) return <div role="status" className="p-8">Loading session...</div>;
 
   return (
     <Routes>
@@ -96,12 +99,12 @@ export const App: React.FC = () => {
       <Route path="/student/checkin" element={<Navigate to="/checkin" replace />} />
       <Route path="/register/student" element={<StudentRegister />} />
       <Route path="/student/register" element={<StudentRegister />} />
-      <Route path="/register/admin" element={<AdminRegister />} />
-      <Route path="/admin/register" element={<AdminRegister />} />
+      <Route path="/register/admin" element={<ProtectedRoute allowedRoles={['admin']}><AdminRegister /></ProtectedRoute>} />
+      <Route path="/admin/register" element={<ProtectedRoute allowedRoles={['admin']}><AdminRegister /></ProtectedRoute>} />
 
       {/* ── Student Portal & Dashboard ── */}
-      <Route path="/student" element={<StudentDashboard />} />
-      <Route path="/student/dashboard" element={<StudentDashboard />} />
+      <Route path="/student" element={<ProtectedRoute allowedRoles={['student']}><StudentDashboard /></ProtectedRoute>} />
+      <Route path="/student/dashboard" element={<ProtectedRoute allowedRoles={['student']}><StudentDashboard /></ProtectedRoute>} />
 
       {/* ── Login & Recovery — Standalone, no chrome ── */}
       <Route
@@ -185,8 +188,7 @@ export const App: React.FC = () => {
       />
 
       {/* ── Legacy Redirects ── */}
-      <Route path="/register/student" element={<Navigate to="/checkin" replace />} />
-      <Route path="/register/admin" element={<Navigate to="/login" replace />} />
+
 
       {/* ── Catch-all ── */}
       <Route

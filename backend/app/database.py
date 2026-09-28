@@ -138,13 +138,6 @@ def init_db() -> None:
                     db.add(bootstrap_admin)
                     db.commit()
                     logger.info(f"Bootstrap administrator created: {clean_email}")
-            else:
-                # Synchronize password with ADMIN_PASSWORD env var if it changed
-                if not verify_password(ADMIN_PASSWORD, existing_admin.password_hash):
-                    existing_admin.password_hash = hash_password(ADMIN_PASSWORD)
-                    existing_admin.updated_at = datetime.now(timezone.utc)
-                    db.commit()
-                    logger.info(f"Synchronized administrator password from environment for: {clean_email}")
         else:
             logger.warning(
                 "ADMIN_EMAIL or ADMIN_PASSWORD is not set. Skipping admin bootstrap."

@@ -26,7 +26,7 @@ export const FacultyDashboard: React.FC = () => {
 
   const [isStartingSession, setIsStartingSession] = useState(false);
 
-  const handleStartSession = () => {
+  const handleStartSession = async () => {
     if (!currentUser) {
       alert("Please log in as a Faculty member to start an attendance session.");
       return;
@@ -34,7 +34,8 @@ export const FacultyDashboard: React.FC = () => {
 
     setIsStartingSession(true);
 
-    startSession({
+    try {
+    await startSession({
       sessionTitle: `${currentUser.department || "Machine Learning"} Lecture Session`,
       facultyId: currentUser.uid,
       facultyName: currentUser.name || "Faculty Member",
@@ -48,7 +49,9 @@ export const FacultyDashboard: React.FC = () => {
       longitude: geofence?.longitude || 80.1514
     });
 
-    setIsStartingSession(false);
+    } catch { /* startSession displays the failure. */ } finally {
+      setIsStartingSession(false);
+    }
   };
 
   const assignedSections = currentUser?.assignedSections || ["CSE-A", "CSE-B"];

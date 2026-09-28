@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from "react";
+import { createPortal } from "react-dom";
 import QRCode from "qrcode";
 import { useAttendance } from "../../context/AttendanceContext";
 import {
@@ -127,7 +128,7 @@ export const QRGenerator: React.FC = () => {
   return (
     <div className="w-full flex flex-col items-center">
       {/* Fullscreen Projector Kiosk Modal (Solid dark background, flicker-free image layer) */}
-      {isKioskMode && (
+      {isKioskMode && createPortal(
         <div className="fixed inset-0 z-50 bg-slate-950 p-6 sm:p-10 flex flex-col justify-between items-center text-white overflow-hidden select-none">
           {/* Top Bar */}
           <div className="w-full max-w-5xl flex justify-between items-center border-b border-slate-800 pb-4">
@@ -225,7 +226,7 @@ export const QRGenerator: React.FC = () => {
 
             <div className="flex items-center gap-2 text-xs font-bold text-teal-400 bg-teal-950/60 px-4 py-1.5 rounded-full border border-teal-800/60">
               <ShieldCheck className="w-4 h-4 text-teal-400" />
-              <span>Anti-Screenshot & Dynamic Geofence Verification Active</span>
+              <span>Rotating QR & Geofence Verification Active</span>
             </div>
           </div>
 
@@ -249,7 +250,7 @@ export const QRGenerator: React.FC = () => {
               Scan with Phone Camera or Google Lens to open the student facial check-in portal.
             </p>
           </div>
-        </div>
+        </div>, document.body
       )}
 
       {/* Standard Compact QR Widget */}
@@ -293,7 +294,7 @@ export const QRGenerator: React.FC = () => {
         {/* Rotation Countdown Progress */}
         <div className="w-full space-y-1">
           <div className="flex justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400">
-            <span>Anti-Screenshot Refresh</span>
+            <span>QR Token Refresh</span>
             <span className="font-mono text-teal-600 dark:text-teal-400">{rotationCountdown}s</span>
           </div>
           <div className="h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">

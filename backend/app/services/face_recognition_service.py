@@ -1,4 +1,5 @@
 import numpy as np
+from app.utils.face_matcher import valid_face_vector, compare_face_embeddings
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -34,7 +35,7 @@ class FaceRecognitionService:
     ) -> None:
         """Register or update an enrolled face vector in the fast memory registry."""
         ht = str(hall_ticket).strip().upper()
-        if not vector or len(vector) not in (128, 512):
+        if not valid_face_vector(vector):
             raise ValueError(f"Vector length must be 128 or 512, received {len(vector) if vector else 0}")
 
         np_vec = self._normalize(np.array(vector, dtype=np.float32))
@@ -82,26 +83,7 @@ class FaceRecognitionService:
         Returns (is_match, distance, confidence_pct).
         Fails closed if either vector is missing or invalid.
         """
-        if not v1 or not v2 or len(v1) != len(v2):
-            return False, 1.0, 0
-
-        nv1 = self._normalize(np.array(v1, dtype=np.float32))
-        nv2 = self._normalize(np.array(v2, dtype=np.float32))
-        
-        diff = nv1 - nv2
-        distance = float(np.linalg.norm(diff))
-        match = distance <= threshold
-
-        # Calibrated confidence: genuine matches (dist <= 0.42) get 80-100%, impostors drop to 0-65%
-        if distance <= threshold:
-            pct = 100 - (distance / threshold) * 20
-            conf = max(80, min(100, int(round(pct))))
-        else:
-            excess = distance - threshold
-            pct = 65 - (excess / 0.35) * 65
-            conf = max(0, min(65, int(round(pct))))
-
-        return match, round(distance, 4), conf
+        return compare_face_embeddings(v1, v2, threshold)
 
     def match_single_vector(
         self,
@@ -114,7 +96,7 @@ class FaceRecognitionService:
         Uses calibrated thresholds (0.42 for 1:1, 0.38 for 1:N) with Top-2 margin validation.
         """
         dim = len(live_vector) if live_vector else 0
-        if dim not in (128, 512):
+        if not valid_face_vector(live_vector):
             return {
                 "matched": False,
                 "error": f"Invalid vector dimension {dim}. Expected 128 or 512."

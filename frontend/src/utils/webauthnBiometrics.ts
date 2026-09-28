@@ -79,7 +79,8 @@ export interface BiometricVerifyResult {
 export async function enrollPlatformBiometrics(
   userId: string,
   userName: string,
-  userEmail: string
+  userEmail: string,
+  enrollmentToken?: string | null
 ): Promise<BiometricEnrollResult> {
   try {
     if (!window.PublicKeyCredential) {
@@ -109,6 +110,7 @@ export async function enrollPlatformBiometrics(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           hallTicketNo: cleanHallTicket,
+          enrollmentToken,
           name: userName,
           email: userEmail
         })
@@ -123,19 +125,14 @@ export async function enrollPlatformBiometrics(
             pubKeyCredParams = optData.options.pubKeyCredParams;
           }
         } else {
-          challengeBytes = new Uint8Array(32);
-          window.crypto.getRandomValues(challengeBytes);
-          userIdBytes = new TextEncoder().encode(cleanHallTicket);
+          throw new Error("Passkey registration options were not issued.");
         }
       } else {
-        challengeBytes = new Uint8Array(32);
-        window.crypto.getRandomValues(challengeBytes);
-        userIdBytes = new TextEncoder().encode(cleanHallTicket);
+        const error = await optResp.json();
+        throw new Error(error.detail || "Passkey registration is not authorized.");
       }
     } catch (err) {
-      challengeBytes = new Uint8Array(32);
-      window.crypto.getRandomValues(challengeBytes);
-      userIdBytes = new TextEncoder().encode(cleanHallTicket);
+      throw err;
     }
 
     const publicKeyOptions: PublicKeyCredentialCreationOptions = {
@@ -149,7 +146,7 @@ export async function enrollPlatformBiometrics(
       pubKeyCredParams,
       authenticatorSelection: {
         authenticatorAttachment: "platform",
-        userVerification: "preferred",
+        userVerification: "required",
         requireResidentKey: false
       },
       timeout: 60000,
@@ -173,19 +170,24 @@ export async function enrollPlatformBiometrics(
 
     // 2. Post verification and store public key on backend
     try {
-      await fetch("/api/biometrics/webauthn/register-verify", {
+      const verification = await fetch("/api/biometrics/webauthn/register-verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           hallTicketNo: cleanHallTicket,
+          enrollmentToken,
           credentialId: credential.id,
           rawId: rawIdB64,
           clientDataJSON: clientDataB64,
           attestationObject: attestationB64
         })
       });
+      if (!verification.ok) {
+        const error = await verification.json();
+        throw new Error(error.detail || "Passkey registration rejected.");
+      }
     } catch (verErr) {
-      console.warn("[WebAuthn] Server verify note:", verErr);
+      throw verErr;
     }
 
     return {
@@ -259,7 +261,7 @@ export async function verifyPlatformBiometrics(
     const getOptions: PublicKeyCredentialRequestOptions = {
       challenge: challengeBytes as unknown as BufferSource,
       timeout: 60000,
-      userVerification: "preferred",
+      userVerification: "required",
       rpId,
       allowCredentials
     };

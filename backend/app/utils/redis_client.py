@@ -34,7 +34,7 @@ def get_redis_client():
         ssl_kwargs = {}
         if REDIS_URL.startswith("rediss://"):
             import ssl
-            ssl_kwargs["ssl_cert_reqs"] = None
+            ssl_kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
 
         client = redis.from_url(
             REDIS_URL,
@@ -178,3 +178,16 @@ def test_redis_connection() -> Dict[str, Any]:
         "active_memory_keys": len(_memory_otp_cache)
     }
 
+
+
+def consume_otp(key: str) -> Optional[str]:
+    """Atomically consume a one-time challenge, including the local fallback."""
+    clean_key = key.strip().lower()
+    client = get_redis_client()
+    if client:
+        value = client.getdel(f"otp:reset:{clean_key}")
+        return str(value) if value is not None else None
+    item = _memory_otp_cache.pop(clean_key, None)
+    if item and time.time() <= item["expires_at"]:
+        return item["otp"]
+    return None

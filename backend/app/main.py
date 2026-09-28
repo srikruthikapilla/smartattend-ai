@@ -21,12 +21,7 @@ try:
     from slowapi.errors import RateLimitExceeded
     from app.config import REDIS_URL
 
-    limiter = Limiter(
-        key_func=get_remote_address,
-        storage_uri=REDIS_URL,
-        swallow_errors=True,
-        default_limits=[]
-    )
+    from app.routes.auth import _limiter as limiter
     RATE_LIMITING_ENABLED = True
 except Exception:
     limiter = None
@@ -44,8 +39,18 @@ set_sio_server(sio)
 set_attendance_sio(sio)
 
 @sio.event
-async def connect(sid, environ):
-    print(f"🔌 WebSocket Client Connected: {sid}")
+async def connect(sid, environ, auth=None):
+    from app.database import get_db_context
+    from app.dependencies.auth import get_current_user
+    try:
+        request = Request(environ["asgi.scope"])
+        with get_db_context() as db:
+            user = get_current_user(request, None, environ.get("HTTP_AUTHORIZATION"), db)
+        if user["role"] not in ("admin", "faculty"):
+            return False
+        return True
+    except Exception:
+        return False
 
 @sio.event
 async def disconnect(sid):
@@ -76,6 +81,18 @@ fastapi_app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@fastapi_app.middleware("http")
+async def browser_security(request: Request, call_next):
+    origin = request.headers.get("origin")
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        if (origin and origin not in CORS_ORIGINS) or request.headers.get("sec-fetch-site") == "cross-site":
+            return JSONResponse(status_code=403, content={"detail": "Untrusted request origin."})
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 # ---------------------------------------------------------------------------
 # Startup

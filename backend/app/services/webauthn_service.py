@@ -13,6 +13,9 @@ import secrets
 from typing import Dict, Any, Optional, Tuple
 
 from app.utils.redis_client import get_redis_client
+from app.config import CORS_ORIGINS
+from webauthn import verify_registration_response as verify_registration, verify_authentication_response as verify_authentication
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +68,8 @@ def pop_challenge(key: str) -> Optional[str]:
     redis_key = f"webauthn:chal:{key}"
     if client:
         try:
-            val = client.get(redis_key)
+            val = client.getdel(redis_key)
             if val:
-                client.delete(redis_key)
                 return str(val)
         except Exception as e:
             logger.warning(f"[WebAuthn] Redis challenge retrieve note: {e}")
@@ -112,7 +114,7 @@ def generate_registration_options(
         ],
         "authenticatorSelection": {
             "authenticatorAttachment": "platform",
-            "userVerification": "preferred",
+            "userVerification": "required",
             "requireResidentKey": False
         },
         "timeout": 60000,
@@ -136,36 +138,21 @@ def verify_registration_response(
         return False, {"error": "WebAuthn registration challenge expired or not found. Please try again."}
 
     try:
-        # 1. Parse clientDataJSON
-        cd_raw = _safe_b64decode(client_data_json)
-        client_data = json.loads(cd_raw.decode("utf-8"))
-
-        if client_data.get("type") != "webauthn.create":
-            return False, {"error": f"Invalid clientData type: {client_data.get('type')}"}
-
-        received_challenge = client_data.get("challenge", "").rstrip("=")
-        if received_challenge != stored_challenge.rstrip("="):
-            return False, {"error": "Challenge mismatch in WebAuthn registration."}
-
-        # 2. Extract public key and authenticator data
-        # Store credential_id and client_data representation
-        pub_key_record = {
-            "credentialId": credential_id,
-            "rawId": raw_id,
-            "type": "public-key",
-            "algorithm": "ES256",
-            "registeredAt": client_data.get("origin") or origin or "https://localhost"
-        }
-
+        if origin not in CORS_ORIGINS:
+            raise ValueError("Untrusted origin")
+        verified = verify_registration(
+            credential={"id": credential_id, "rawId": raw_id, "type": "public-key",
+                        "response": {"clientDataJSON": client_data_json,
+                                     "attestationObject": attestation_object}},
+            expected_challenge=_safe_b64decode(stored_challenge),
+            expected_rp_id=urlparse(origin).hostname, expected_origin=origin,
+            require_user_verification=True)
         return True, {
-            "credentialId": credential_id,
-            "publicKey": json.dumps(pub_key_record),
-            "signCount": 0
-        }
-
-    except Exception as e:
-        logger.error(f"[WebAuthn] Registration parse exception: {e}")
-        return False, {"error": f"Failed to verify WebAuthn registration: {str(e)}"}
+            "credentialId": base64.urlsafe_b64encode(verified.credential_id).decode().rstrip("="),
+            "publicKey": base64.urlsafe_b64encode(verified.credential_public_key).decode(),
+            "signCount": verified.sign_count}
+    except Exception:
+        return False, {"error": "Passkey registration could not be verified."}
 
 
 def generate_authentication_options(
@@ -186,7 +173,7 @@ def generate_authentication_options(
         "challenge": challenge_b64,
         "timeout": 60000,
         "rpId": rp_id,
-        "userVerification": "preferred"
+        "userVerification": "required"
     }
 
     if credential_id:
@@ -223,49 +210,19 @@ def verify_authentication_response(
         return False, {"error": "Presented credential does not match the student's enrolled hardware authenticator."}
 
     try:
-        # 1. Parse clientDataJSON
-        cd_raw = _safe_b64decode(client_data_json)
-        client_data = json.loads(cd_raw.decode("utf-8"))
-
-        if client_data.get("type") != "webauthn.get":
-            return False, {"error": f"Invalid clientData type: {client_data.get('type')}"}
-
-        received_challenge = client_data.get("challenge", "").rstrip("=")
-        if received_challenge != stored_challenge.rstrip("="):
-            return False, {"error": "Challenge mismatch in WebAuthn authentication."}
-
-        # 2. Authenticator Data inspection (extract flags and sign counter)
-        auth_bytes = _safe_b64decode(authenticator_data)
-
-        if len(auth_bytes) < 37:
-            return False, {"error": "Invalid authenticatorData length."}
-
-        # Flags byte is at offset 32
-        flags = auth_bytes[32]
-        user_present = bool(flags & 0x01)
-        user_verified = bool(flags & 0x04)
-
-        if not user_present:
-            return False, {"error": "User presence (UP) flag not set on hardware authenticator."}
-
-        # Sign counter: 4-byte big-endian integer at offset 33..37
-        sign_count = int.from_bytes(auth_bytes[33:37], byteorder="big")
-
-        # Anti-replay counter check: if hardware supports counter and it has not incremented
-        if sign_count > 0 and stored_sign_count > 0 and sign_count <= stored_sign_count:
-            logger.warning(
-                f"[WebAuthn Replay Alert] {user_id}: received signCount {sign_count} <= stored {stored_sign_count}"
-            )
-            return False, {"error": "Cloned or replayed authenticator token detected (sign counter replay alert)."}
-
-        new_count = max(sign_count, stored_sign_count + 1)
-
-        return True, {
-            "verified": True,
-            "userVerified": user_verified,
-            "newSignCount": new_count
-        }
-
-    except Exception as e:
-        logger.error(f"[WebAuthn] Assertion verification error: {e}")
-        return False, {"error": f"WebAuthn assertion verification failed: {str(e)}"}
+        if not stored_credential_id or not stored_public_key:
+            raise ValueError("Missing enrolled public key")
+        origin = json.loads(_safe_b64decode(client_data_json))["origin"]
+        if origin not in CORS_ORIGINS:
+            raise ValueError("Untrusted origin")
+        verified = verify_authentication(
+            credential={"id": credential_id, "rawId": credential_id, "type": "public-key",
+                        "response": {"clientDataJSON": client_data_json,
+                                     "authenticatorData": authenticator_data, "signature": signature}},
+            expected_challenge=_safe_b64decode(stored_challenge),
+            expected_rp_id=urlparse(origin).hostname, expected_origin=origin,
+            credential_public_key=_safe_b64decode(stored_public_key),
+            credential_current_sign_count=stored_sign_count, require_user_verification=True)
+        return True, {"verified": True, "userVerified": True, "newSignCount": verified.new_sign_count}
+    except Exception:
+        return False, {"error": "Passkey signature verification failed. Older credentials may require re-enrollment."}

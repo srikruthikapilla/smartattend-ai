@@ -25,8 +25,8 @@ import jwt as pyjwt
 from app.config import JWT_SECRET, COOKIE_NAME, COOKIE_MAX_AGE, COOKIE_DOMAIN, COOKIE_SECURE, COOKIE_SAMESITE
 from app.database import get_db
 from app.dependencies.auth import get_current_user, get_optional_current_user, require_role
-from app.models.db_models import Admin, Faculty, Student, AttendanceRecord
-from app.utils.security import hash_password, verify_password
+from app.models.db_models import Admin, Faculty, Student, AttendanceRecord, AuditLog
+from app.utils.security import hash_password, verify_password, credential_version
 from app.utils.redis_client import set_otp, get_otp, delete_otp
 from app.utils.email_service import send_otp_email
 
@@ -38,7 +38,9 @@ logger = logging.getLogger(__name__)
 try:
     from slowapi import Limiter  # type: ignore
     from slowapi.util import get_remote_address  # type: ignore
-    _limiter = Limiter(key_func=get_remote_address)
+    from app.config import REDIS_URL
+    _limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL,
+                       in_memory_fallback_enabled=True, swallow_errors=False)
     _RATE_LIMIT_AVAILABLE = True
 except ImportError:
     _limiter = None
@@ -189,10 +191,15 @@ def get_all_users(
 
 
 @router.post("/logout")
-def logout(response: Response):
+def logout(response: Response, caller=Depends(get_optional_current_user), db: Session = Depends(get_db)):
     """
     Logout user by clearing the httpOnly cookie.
     """
+    if caller:
+        db.add(AuditLog(id=uuid.UUID(caller["payload"]["jti"]), action="SESSION_REVOKED",
+                        performed_by=caller["id"], performer_role=caller["role"],
+                        details={"expires_at": caller["payload"]["exp"]}))
+        db.commit()
     response.delete_cookie(
         key=COOKIE_NAME,
         domain=COOKIE_DOMAIN,
@@ -270,6 +277,8 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
             "email": admin.email,
             "name": admin.name,
             "role": "admin",
+            "jti": str(uuid.uuid4()),
+            "credential_version": credential_version(admin.password_hash),
             "type": "access",
             "exp": int(time.time()) + (8 * 3600)  # 8-hour session
         }
@@ -314,6 +323,8 @@ def login(request: Request, response: Response, payload: LoginRequest, db: Sessi
             "email": faculty.email,
             "name": faculty.name,
             "role": "faculty",
+            "jti": str(uuid.uuid4()),
+            "credential_version": credential_version(faculty.password_hash),
             "type": "access",
             "exp": int(time.time()) + (8 * 3600)  # 8-hour session
         }
@@ -368,6 +379,9 @@ def register_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Only an authenticated Administrator can register '{target_role}' accounts. Please log in as an administrator first."
         )
+
+    if target_role not in ("admin", "faculty", "student"):
+        raise HTTPException(400, "Invalid role.")
 
     # 1. Admin Registration
     if target_role == "admin":
@@ -494,7 +508,7 @@ def register_user(
             year=payload.year or "3",
             semester=payload.semester or "1",
             college=payload.college or "Swarna Bharathi Institute of Science and Technology (SBIT)",
-            status=payload.status or "approved"
+            status=(payload.status or "approved") if is_admin else "pending"
         )
         db.add(new_student)
         db.commit()
@@ -557,6 +571,8 @@ def update_user(
         (func.upper(Student.hall_ticket_no) == clean_id.upper())
     ).first()
     if student:
+        if not is_admin and caller_id != str(student.id):
+            raise HTTPException(403, "Access denied.")
         update_data = payload.dict(exclude_unset=True)
         for field in ["name", "phone", "branch", "section", "year", "semester"]:
             if field in update_data and update_data[field] is not None:
@@ -1022,5 +1038,6 @@ def verify_student_enrollment_otp(
         "success": True,
         "message": "Verification successful. You may now proceed with face enrollment.",
         "enrollment_token": enrollment_token,
+        "report_token": pyjwt.encode({"ht": clean_ht, "type": "attendance_report", "exp": int(time.time()) + 600}, JWT_SECRET, algorithm="HS256"),
         "expires_in_seconds": 1800
     }

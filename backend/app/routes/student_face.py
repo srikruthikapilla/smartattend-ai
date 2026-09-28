@@ -77,17 +77,9 @@ def verify_student_ownership(student_id: str, current_user: Dict[str, Any]):
     if user_role in ["admin", "faculty"]:
         return
 
-    user_email = str(current_user.get("email", "")).lower()
-    user_meta = current_user.get("user_metadata") or {}
-    user_meta_ht = str(user_meta.get("hall_ticket_no", "")).lower()
-    student_id_lower = student_id.lower().strip()
-
-    # Check match against UUID, Hall Ticket Number, or email prefix
-    if (
-        user_id.lower() == student_id_lower
-        or (user_meta_ht and user_meta_ht == student_id_lower)
-        or (user_email and user_email.startswith(student_id_lower + "@"))
-    ):
+    student_key = student_id.strip().lower()
+    hall_ticket = str(current_user.get("hall_ticket_no") or "").lower()
+    if student_key == user_id.lower() or (hall_ticket and student_key == hall_ticket):
         return
 
     raise HTTPException(
@@ -130,6 +122,8 @@ def enroll_student_face(
     Protected: Only the authenticated student or an admin/faculty can perform enrollment.
     """
     verify_student_ownership(student_id, current_user)
+    if getattr(payload, "hallTicketNo", None):
+        verify_student_ownership(payload.hallTicketNo, current_user)
 
     if not payload.faceDescriptor or len(payload.faceDescriptor) not in (128, 512):
         raise HTTPException(
@@ -149,7 +143,6 @@ def enroll_student_face(
     normalized_ht = _normalize_student_key(ht)
     user_name = current_user.get("name") or current_user.get("user_metadata", {}).get("name")
 
-    _cache_face_descriptor(student_id, payload.faceDescriptor, now_iso, ht, user_name)
 
     try:
         # 1. Update user profile in PostgreSQL
@@ -175,11 +168,11 @@ def enroll_student_face(
             emb_record.consent_timestamp = now_dt
             emb_record.updated_at = now_dt
             if user:
-                emb_record.user_id = user.id
+                emb_record.student_id = user.id
         else:
             new_emb = StudentFaceEmbedding(
                 id=uuid.uuid4(),
-                user_id=user.id if user else None,
+                student_id=user.id if user else None,
                 hall_ticket_no=ht_key,
                 embedding_vector=payload.faceDescriptor,
                 embedding_dim=len(payload.faceDescriptor),
@@ -192,6 +185,7 @@ def enroll_student_face(
             db.add(new_emb)
 
         db.commit()
+        _cache_face_descriptor(student_id, payload.faceDescriptor, now_iso, ht, user_name)
 
     except Exception as e:
         logger.error(f"Failed to save face descriptor for student {student_id}: {e}", exc_info=True)
@@ -219,6 +213,8 @@ def update_student_face(
     Protected: Only the authenticated student or an admin can update enrollment.
     """
     verify_student_ownership(student_id, current_user)
+    if getattr(payload, "hallTicketNo", None):
+        verify_student_ownership(payload.hallTicketNo, current_user)
 
     if not payload.faceDescriptor or len(payload.faceDescriptor) not in (128, 512):
         raise HTTPException(status_code=400, detail="A valid 128-D or 512-D faceDescriptor array is required.")
@@ -229,7 +225,6 @@ def update_student_face(
     normalized_ht = _normalize_student_key(ht)
     user_name = current_user.get("name") or current_user.get("user_metadata", {}).get("name")
 
-    _cache_face_descriptor(student_id, payload.faceDescriptor, now_iso, ht, user_name)
 
     try:
         user = _find_user(db, student_id, normalized_ht)
@@ -252,7 +247,7 @@ def update_student_face(
         else:
             new_emb = StudentFaceEmbedding(
                 id=uuid.uuid4(),
-                user_id=user.id if user else None,
+                student_id=user.id if user else None,
                 hall_ticket_no=ht_key,
                 embedding_vector=payload.faceDescriptor,
                 embedding_dim=len(payload.faceDescriptor),
@@ -265,6 +260,7 @@ def update_student_face(
             db.add(new_emb)
 
         db.commit()
+        _cache_face_descriptor(student_id, payload.faceDescriptor, now_iso, ht, user_name)
 
     except Exception as e:
         logger.error(f"Failed to update face descriptor for student {student_id}: {e}", exc_info=True)

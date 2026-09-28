@@ -5,6 +5,9 @@ Hardware-backed passkey & platform biometric endpoints for SBIT students.
 """
 
 import logging
+import jwt
+from app.config import JWT_SECRET, CORS_ORIGINS
+from app.dependencies.auth import get_optional_current_user
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
@@ -27,12 +30,14 @@ router = APIRouter(prefix="/api/biometrics/webauthn", tags=["WebAuthn Hardware B
 
 
 class RegisterOptionsRequest(BaseModel):
+    enrollmentToken: Optional[str] = None
     hallTicketNo: str
     name: Optional[str] = None
     email: Optional[str] = None
 
 
 class RegisterVerifyRequest(BaseModel):
+    enrollmentToken: Optional[str] = None
     hallTicketNo: str
     credentialId: str
     rawId: str
@@ -52,21 +57,47 @@ class AuthVerifyRequest(BaseModel):
     signature: str
 
 
+def authorize_registration(payload, caller, db):
+    ht = payload.hallTicketNo.strip().upper()
+    student = db.query(Student).filter(Student.hall_ticket_no == ht).first()
+    if not student or student.status != "approved":
+        raise HTTPException(403, "An approved student account is required.")
+    if not caller or caller["role"] not in ("admin", "faculty"):
+        try:
+            claims = jwt.decode(payload.enrollmentToken, JWT_SECRET, algorithms=["HS256"],
+                                options={"require": ["exp", "type", "ht"]})
+            if claims["type"] != "enrollment" or claims["ht"].upper() != ht:
+                raise ValueError("Wrong identity")
+        except Exception:
+            raise HTTPException(403, "Verify your email before registering a passkey.")
+    if student.biometric_public_key:
+        raise HTTPException(409, "A passkey is already enrolled. Ask staff to reset it first.")
+
+
+def trusted_origin(request):
+    origin = request.headers.get("origin")
+    if origin not in CORS_ORIGINS:
+        raise HTTPException(403, "Untrusted passkey origin.")
+    return origin
+
+
 @router.post("/register-options")
 @_rate_limit("10/minute")
 def get_register_options(
     request: Request,
     payload: RegisterOptionsRequest,
+    caller=Depends(get_optional_current_user),
     db: Session = Depends(get_db)
 ):
     """Generate W3C WebAuthn challenge for registering a hardware passkey / fingerprint."""
+    authorize_registration(payload, caller, db)
     ht = payload.hallTicketNo.strip().upper()
     student = db.query(Student).filter(Student.hall_ticket_no == ht).first()
     
     student_name = payload.name or (student.name if student else f"Student ({ht})")
     student_email = payload.email or (student.email if student and student.email else None)
 
-    origin = request.headers.get("origin") or str(request.base_url)
+    origin = trusted_origin(request)
     options = generate_registration_options(
         user_id=ht,
         user_name=student_name,
@@ -81,11 +112,13 @@ def get_register_options(
 def verify_registration(
     request: Request,
     payload: RegisterVerifyRequest,
+    caller=Depends(get_optional_current_user),
     db: Session = Depends(get_db)
 ):
     """Verify hardware attestation response and persist credential to PostgreSQL."""
+    authorize_registration(payload, caller, db)
     ht = payload.hallTicketNo.strip().upper()
-    origin = request.headers.get("origin") or str(request.base_url)
+    origin = trusted_origin(request)
 
     valid, result = verify_registration_response(
         user_id=ht,
@@ -100,16 +133,8 @@ def verify_registration(
         raise HTTPException(status_code=400, detail=result.get("error", "WebAuthn registration failed."))
 
     student = db.query(Student).filter(Student.hall_ticket_no == ht).first()
-    if not student:
-        # Create student record if not existing yet (no default email if user did not provide one)
-        student = Student(
-            hall_ticket_no=ht,
-            name=f"Student ({ht})",
-            email=None,
-            branch="CSE",
-            section="A"
-        )
-        db.add(student)
+    if not student or student.status != "approved":
+        raise HTTPException(403, "Approved student account no longer available.")
 
     student.biometric_credential_id = result["credentialId"]
     student.biometric_public_key = result["publicKey"]
@@ -138,7 +163,7 @@ def get_auth_options(
     student = db.query(Student).filter(Student.hall_ticket_no == ht).first()
 
     credential_id = student.biometric_credential_id if student else None
-    origin = request.headers.get("origin") or str(request.base_url)
+    origin = trusted_origin(request)
 
     options = generate_authentication_options(
         user_id=ht,
