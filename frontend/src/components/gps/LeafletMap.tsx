@@ -125,10 +125,12 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
       style={{ height, width: '100%', borderRadius: '16px', zIndex: 10, backgroundColor: '#f1f5f9' }}
       className={`shadow-inner ${className}`}
     >
-      {/* Standard OpenStreetMap Tiles */}
+      {/* CARTO Voyager Basemap (free, no API key required) */}
       <TileLayer
-        url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+        subdomains="abcd"
+        maxZoom={20}
       />
 
       <MapRecenter lat={centerLat} lng={centerLng} zoom={zoom} />
