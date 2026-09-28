@@ -125,12 +125,11 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
       style={{ height, width: '100%', borderRadius: '16px', zIndex: 10, backgroundColor: '#f1f5f9' }}
       className={`shadow-inner ${className}`}
     >
-      {/* CARTO Voyager Tiles (OSM IP-blocked — CARTO verified working) */}
+      {/* High-Definition Esri World Street Map (reliable, full road & building detail) */}
       <TileLayer
-        url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-        subdomains="abcd"
-        maxZoom={20}
+        url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
+        attribution='Tiles &copy; <a href="https://www.esri.com/">Esri</a>'
+        maxZoom={19}
       />
 
       <MapRecenter lat={centerLat} lng={centerLng} zoom={zoom} />
