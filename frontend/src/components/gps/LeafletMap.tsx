@@ -1,15 +1,18 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, Circle, Marker, Popup, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
 // Fix default marker icons (Leaflet bundles break with Vite/webpack)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconRetinaUrl: markerIcon2x,
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
 });
 
 // Custom student marker icon (small teal dot with pulse)
@@ -85,6 +88,17 @@ const MapRecenter: React.FC<{ lat: number; lng: number; zoom: number }> = ({ lat
   return null;
 };
 
+const MapResize: React.FC = () => {
+  const map = useMap();
+  useEffect(() => {
+    const observer = new ResizeObserver(() => map.invalidateSize({ pan: false }));
+    observer.observe(map.getContainer());
+    map.invalidateSize({ pan: false });
+    return () => observer.disconnect();
+  }, [map]);
+  return null;
+};
+
 /**
  * Internal component to handle map click events.
  */
@@ -113,7 +127,10 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
   className = '',
   showRadius = true,
 }) => {
+  const [fallback, setFallback] = useState(false);
+  const [tileError, setTileError] = useState(false);
   return (
+    <div className="relative">
     <MapContainer
       center={[centerLat, centerLng]}
       zoom={zoom}
@@ -127,11 +144,17 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
     >
       {/* High-Definition Esri World Street Map (reliable, full road & building detail) */}
       <TileLayer
-        url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
-        attribution='Tiles &copy; <a href="https://www.esri.com/">Esri</a>'
+        key={fallback ? "osm" : "esri"}
+        url={fallback ? "https://tile.openstreetmap.org/{z}/{x}/{y}.png" : "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"}
+        eventHandlers={{
+          tileerror: () => { if (!fallback) setFallback(true); else setTileError(true); },
+          tileload: () => setTileError(false),
+        }}
+        attribution={fallback ? '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' : 'Tiles &copy; <a href="https://www.esri.com/">Esri</a>'}
         maxZoom={19}
       />
 
+      <MapResize />
       <MapRecenter lat={centerLat} lng={centerLng} zoom={zoom} />
 
       {/* Click handler for interactive mode */}
@@ -189,6 +212,11 @@ export const LeafletMap: React.FC<LeafletMapProps> = ({
         );
       })}
     </MapContainer>
+    {tileError && <div role="status" className="absolute top-2 left-2 right-2 z-20 rounded-lg bg-white p-2 text-xs text-slate-800 shadow">
+      Map tiles could not load. Check your connection.
+      <button type="button" className="ml-2 underline" onClick={() => { setTileError(false); setFallback(false); }}>Retry map</button>
+    </div>}
+    </div>
   );
 };
 

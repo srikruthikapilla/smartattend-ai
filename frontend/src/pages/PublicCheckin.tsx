@@ -199,6 +199,8 @@ export const PublicCheckin: React.FC = () => {
       return;
     }
 
+    if (enrollFaceError) { setHallTicketError(enrollFaceError); return; }
+    if (isModelLoading) { setHallTicketError('Face models are still loading. Please wait a moment.'); return; }
     setHallTicketError('');
     setHallTicket(formatted);
     resetAllCheckinState();
@@ -371,8 +373,8 @@ export const PublicCheckin: React.FC = () => {
           framesCollected: 8,
           totalFrames: 8,
           pct: 100,
-          status: 'done',
-          message: 'Face registered! Starting attendance scan...'
+          status: 'processing',
+          message: 'Saving your face profile...'
         });
 
         // 1. Save permanently to PostgreSQL database before attendance scan.
@@ -380,6 +382,7 @@ export const PublicCheckin: React.FC = () => {
           await persistFaceEnrollment(descriptor);
           if (controller.signal.aborted) return;
           localStorage.setItem(`enrolled_${hallTicket}`, 'true');
+          setEnrollProgress({ framesCollected: 8, totalFrames: 8, pct: 100, status: 'done', message: 'Face profile saved. Starting attendance scan...' });
         } catch (saveErr) {
           console.warn('Auto biometric save error:', saveErr);
           enrollmentStartedRef.current = false;
@@ -429,33 +432,15 @@ export const PublicCheckin: React.FC = () => {
         `${hallTicket.toLowerCase()}@sbit.ac.in`,
         enrollmentToken
       );
-      if (bioRes.success) {
-        setEnrolledBioCredentialId(bioRes.credentialId || 'bio_cred_001');
+      if (!bioRes.success || !bioRes.credentialId) {
+        alert(bioRes.message || 'Passkey enrollment failed. Please retry.');
+        return;
       }
-    } catch (e) {
-      console.warn('Biometric registration optional:', e);
-      setEnrolledBioCredentialId('bio_cred_fallback');
+      setEnrolledBioCredentialId(bioRes.credentialId);
+      verifyLocation();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Passkey enrollment failed.');
     }
-
-    try {
-      await fetch('/api/student/register-biometrics', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          hallTicketNo: hallTicket,
-          name: studentName || `Student ${hallTicket}`,
-          branch: studentBranch,
-          section: 'A',
-          faceDescriptor: enrolledFaceDescriptor,
-          biometricCredentialId: enrolledBioCredentialId || 'bio_cred_001'
-        })
-      });
-    } catch (e) {
-      console.warn('Backend sync note:', e);
-    }
-
-    setStep('location_check');
-    verifyLocation();
   };
 
   // 6. Geolocation (Seamless & Non-Intrusive — Dynamic Session Baseline)

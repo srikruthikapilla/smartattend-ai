@@ -139,14 +139,16 @@ def enroll_student_face(
 
     now_dt = datetime.now(timezone.utc)
     now_iso = now_dt.isoformat()
-    ht = payload.hallTicketNo or student_id
+    user = _find_user(db, student_id, _normalize_student_key(payload.hallTicketNo or student_id))
+    if not user or user.status != "approved":
+        raise HTTPException(404, "Approved student record not found.")
+    ht = user.hall_ticket_no
     normalized_ht = _normalize_student_key(ht)
-    user_name = current_user.get("name") or current_user.get("user_metadata", {}).get("name")
+    user_name = user.name
 
 
     try:
         # 1. Update user profile in PostgreSQL
-        user = _find_user(db, student_id, normalized_ht)
         if user:
             user.face_descriptor = payload.faceDescriptor
             user.face_enrollment_status = "enrolled"
@@ -221,13 +223,15 @@ def update_student_face(
 
     now_dt = datetime.now(timezone.utc)
     now_iso = now_dt.isoformat()
-    ht = payload.hallTicketNo or student_id
+    user = _find_user(db, student_id, _normalize_student_key(payload.hallTicketNo or student_id))
+    if not user or user.status != "approved":
+        raise HTTPException(404, "Approved student record not found.")
+    ht = user.hall_ticket_no
     normalized_ht = _normalize_student_key(ht)
-    user_name = current_user.get("name") or current_user.get("user_metadata", {}).get("name")
+    user_name = user.name
 
 
     try:
-        user = _find_user(db, student_id, normalized_ht)
         if user:
             user.face_descriptor = payload.faceDescriptor
             user.face_enrollment_status = "enrolled"
@@ -288,12 +292,6 @@ def revoke_student_face_data(
     verify_student_ownership(student_id, current_user)
 
     norm_id = _normalize_student_key(student_id)
-    student_face_cache.pop(student_id, None)
-    student_face_cache.pop(norm_id, None)
-    face_service.remove_embedding(student_id)
-    if norm_id:
-        face_service.remove_embedding(norm_id)
-
     try:
         now_dt = datetime.now(timezone.utc)
         user = _find_user(db, student_id, norm_id)
@@ -307,7 +305,8 @@ def revoke_student_face_data(
         db.query(StudentFaceEmbedding).filter(
             or_(
                 StudentFaceEmbedding.hall_ticket_no == norm_id,
-                StudentFaceEmbedding.hall_ticket_no == student_id
+                StudentFaceEmbedding.hall_ticket_no == student_id,
+                StudentFaceEmbedding.student_id == user.id if user else False
             )
         ).delete(synchronize_session=False)
 
@@ -322,6 +321,11 @@ def revoke_student_face_data(
         )
         db.add(audit)
         db.commit()
+        for key in {student_id, norm_id, getattr(user, "hall_ticket_no", None)}:
+            if key:
+                student_face_cache.pop(key, None)
+                student_face_cache.pop(key.lower(), None)
+                face_service.remove_embedding(key)
 
     except Exception as e:
         logger.error(f"Failed to delete face descriptor for student {student_id}: {e}", exc_info=True)

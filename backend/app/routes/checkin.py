@@ -629,6 +629,7 @@ async def verify_student_checkin(
 
     geofence_enabled = geofence_cfg.enabled if geofence_cfg is not None else True
 
+    distance_m = calculate_haversine_distance(payload.lat, payload.lng, session_lat, session_lng)
     if geofence_enabled:
         distance_m = calculate_haversine_distance(
             payload.lat,
