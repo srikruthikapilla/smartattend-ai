@@ -260,7 +260,7 @@ export const InsertStudentModal: React.FC<InsertStudentModalProps> = ({
           }
 
           if (!isValidHallTicketNo(rawHT)) {
-            errors.push(`Row ${idx + 2}: Invalid Roll Number / Hall Ticket "${rawHT}" (must be 10 characters starting with 2)`);
+            errors.push(`Row ${idx + 2}: Invalid Roll Number / Hall Ticket "${rawHT}" (must be 9 or 10 alphanumeric characters starting with 2)`);
             return;
           }
 

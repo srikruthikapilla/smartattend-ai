@@ -3,11 +3,11 @@ export type UserRole = 'admin' | 'faculty' | 'student';
 export type StudentStatus = 'pending' | 'approved' | 'rejected' | 'suspended';
 
 /**
- * Validates whether a Hall Ticket number conforms to format: 2XXXXXXXXX
- * (10 alphanumeric characters starting with 2)
+ * Validates common Hall Ticket / roll number formats (9 or 10 alphanumeric
+ * characters starting with 2).
  */
 export function isValidHallTicketNo(hallTicket: string): boolean {
-  return /^2[0-9A-Za-z]{9}$/.test(hallTicket.trim());
+  return /^2[0-9A-Za-z]{8,9}$/.test(hallTicket.trim());
 }
 
 export interface UserProfile {

@@ -119,8 +119,8 @@ def get_student_enrollment_status(request: Request, hall_ticket: str, db: Sessio
     has already enrolled their face & platform biometrics in PostgreSQL.
     """
     ht = hall_ticket.strip().upper()
-    if not re.match(r"^2[0-9A-Z]{9}$", ht):
-        raise HTTPException(status_code=400, detail="Invalid Hall Ticket format. Must be 10 characters starting with '2'.")
+    if not re.match(r"^2[0-9A-Z]{8,9}$", ht):
+        raise HTTPException(status_code=400, detail="Invalid Hall Ticket format. Must be 9 or 10 alphanumeric characters starting with '2'.")
 
     # Fast-path: Check high-performance Redis cache first (60s TTL)
 
@@ -288,8 +288,8 @@ def register_student_biometrics(
     Requires an OTP-verified enrollment token for self-service enrollment, OR an active Admin/Faculty session.
     """
     ht = payload.get("hallTicketNo", "").strip().upper()
-    if not re.match(r"^2[0-9A-Z]{9}$", ht):
-        raise HTTPException(status_code=400, detail="Invalid Hall Ticket format. Must be 10 characters starting with '2'.")
+    if not re.match(r"^2[0-9A-Z]{8,9}$", ht):
+        raise HTTPException(status_code=400, detail="Invalid Hall Ticket format. Must be 9 or 10 alphanumeric characters starting with '2'.")
 
     # Authorization Check:
     # 1. Authenticated Staff (Admin or Faculty) can register/update biometrics directly.
@@ -444,8 +444,8 @@ def get_student_attendance_history(hall_ticket: str, db: Session = Depends(get_d
     Retrieves real student details from PostgreSQL along with true attendance statistics and session records.
     """
     ht = hall_ticket.strip().upper()
-    if not re.match(r"^2[0-9A-Z]{9}$", ht):
-        raise HTTPException(status_code=400, detail="Invalid Hall Ticket format. Must be 10 characters starting with '2'.")
+    if not re.match(r"^2[0-9A-Z]{8,9}$", ht):
+        raise HTTPException(status_code=400, detail="Invalid Hall Ticket format. Must be 9 or 10 alphanumeric characters starting with '2'.")
 
     # 1. Fetch real student profile from database
     student_name = f"Student ({ht})"

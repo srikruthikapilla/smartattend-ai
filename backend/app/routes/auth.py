@@ -948,10 +948,10 @@ def request_student_enrollment_otp(
     """
     clean_ht = payload.hall_ticket_no.strip().upper()
     
-    if not re.match(r"^2[0-9A-Z]{9}$", clean_ht):
+    if not re.match(r"^2[0-9A-Z]{8,9}$", clean_ht):
         raise HTTPException(
             status_code=400,
-            detail="Invalid Hall Ticket format. Must be 10 characters starting with '2'."
+            detail="Invalid Hall Ticket format. Must be 9 or 10 alphanumeric characters starting with '2'."
         )
 
     # Look up student in database

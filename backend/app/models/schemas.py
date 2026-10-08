@@ -13,14 +13,14 @@ class FaceDataModel(BaseModel):
 
 
 class HallTicketModel(BaseModel):
-    hall_ticket_no: str = Field(..., description="10 alphanumeric characters starting with 2")
+    hall_ticket_no: str = Field(..., description="9 or 10 alphanumeric characters starting with 2")
 
     @field_validator("hall_ticket_no")
     @classmethod
     def validate_hall_ticket(cls, v: str) -> str:
         v = v.strip().upper()
-        if not re.match(r"^2[0-9A-Z]{9}$", v):
-            raise ValueError("Hall Ticket must be exactly 10 characters starting with '2' (e.g. 21SBIT0501).")
+        if not re.match(r"^2[0-9A-Z]{8,9}$", v):
+            raise ValueError("Hall Ticket must be 9 or 10 alphanumeric characters starting with '2'.")
         return v
 
 class FaceEmbeddingPayload(FaceDataModel):
@@ -71,7 +71,7 @@ class QRSessionStartPayload(BaseModel):
 
 class VerifyCheckinPayload(FaceDataModel):
     token: str = Field(..., description="Session token")
-    hallTicket: str = Field(..., description="10 alphanumeric characters starting with 2")
+    hallTicket: str = Field(..., description="9 or 10 alphanumeric characters starting with 2")
     studentName: Optional[str] = None
     lat: float = Field(..., ge=-90, le=90, allow_inf_nan=False)
     lng: float = Field(..., ge=-180, le=180, allow_inf_nan=False)
@@ -88,8 +88,8 @@ class VerifyCheckinPayload(FaceDataModel):
     @classmethod
     def validate_hall_ticket(cls, v: str) -> str:
         v = v.strip().upper()
-        if not re.match(r"^2[0-9A-Z]{9}$", v):
-            raise ValueError("Hall Ticket must be exactly 10 characters starting with '2' (e.g. 21SBIT0501).")
+        if not re.match(r"^2[0-9A-Z]{8,9}$", v):
+            raise ValueError("Hall Ticket must be 9 or 10 alphanumeric characters starting with '2'.")
         return v
 
 class GeofenceUpdatePayload(BaseModel):

@@ -28,7 +28,7 @@ export const StudentRegister: React.FC = () => {
 
     const cleanHT = hallTicketNo.trim().toUpperCase();
     if (!isValidHallTicketNo(cleanHT)) {
-      setFormError('Invalid Hall Ticket Number. Must be exactly 10 alphanumeric characters starting with 2 (e.g. 21SBIT0501).');
+      setFormError('Invalid Hall Ticket Number. Must be 9 or 10 alphanumeric characters starting with 2 (e.g. 26M605B8B).');
       return;
     }
 
