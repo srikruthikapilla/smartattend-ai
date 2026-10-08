@@ -61,14 +61,15 @@ def start_qr_session(payload: QRSessionStartPayload,
                      current_user=Depends(require_role(["faculty", "admin"])),
                      db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)
+    if payload.latitude is None or payload.longitude is None:
+        raise HTTPException(400, "Current admin or faculty GPS coordinates are required to start a session.")
     session = AttendanceSession(
         id=uuid.uuid4(), faculty_id=current_user["id"], faculty_name=current_user["name"],
         session_title=payload.sessionTitle, branch=payload.branch, section=payload.section,
         room=payload.room, start_time=now,
         end_time=now + timedelta(minutes=payload.durationMinutes), status="active",
-        radius_meters=payload.radiusMeters,
-        geofence={"lat": payload.latitude if payload.latitude is not None else current_geofence["center_lat"],
-                  "lng": payload.longitude if payload.longitude is not None else current_geofence["center_lng"]})
+        radius_meters=200,
+        geofence={"lat": payload.latitude, "lng": payload.longitude})
     db.add(session)
     db.commit()
     db.refresh(session)

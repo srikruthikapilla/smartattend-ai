@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useAttendance } from "../../context/AttendanceContext";
 import { QRGenerator } from "../../components/qr/QRGenerator";
+import { getCurrentLocation } from "../../utils/gps";
 import { Play, StopCircle, Radio, Clock, MapPin, Layers, BookOpen, Building2 } from "lucide-react";
 
 export const QRSessionManager: React.FC = () => {
@@ -13,8 +14,10 @@ export const QRSessionManager: React.FC = () => {
   const [room, setRoom] = useState("Lab-201");
   const [duration, setDuration] = useState(60);
 
-  const handleStart = () => {
-    startSession({
+  const handleStart = async () => {
+    try {
+      const location = await getCurrentLocation();
+      await startSession({
       sessionTitle,
       facultyId: "faculty_201",
       facultyName: "Dr. K. V. S. Rama Rao",
@@ -23,10 +26,13 @@ export const QRSessionManager: React.FC = () => {
       year,
       room,
       durationMinutes: duration,
-      radiusMeters: geofence.radiusMeters,
-      latitude: geofence.latitude,
-      longitude: geofence.longitude,
-    });
+      radiusMeters: 200,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      });
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Unable to get current location.");
+    }
   };
 
   return (

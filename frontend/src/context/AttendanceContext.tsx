@@ -359,10 +359,12 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     const origin = window.location.origin;
     const newToken = `${origin}/checkin?token=${rawTokenId}`;
 
-    // Keep campus geofence anchor fixed to admin settings
-    const sessionLat = geofence.latitude ?? 17.2472;
-    const sessionLng = geofence.longitude ?? 80.1514;
-    const sessionRadius = data.radiusMeters ?? geofence.radiusMeters ?? 150;
+    if (!Number.isFinite(data.latitude) || !Number.isFinite(data.longitude)) {
+      throw new Error("Current admin or faculty location is required to start a session.");
+    }
+    const sessionLat = data.latitude!;
+    const sessionLng = data.longitude!;
+    const sessionRadius = 200;
 
     const dynamicGeofence: GeofenceConfig = {
       latitude: sessionLat,

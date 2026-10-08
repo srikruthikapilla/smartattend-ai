@@ -627,21 +627,16 @@ async def verify_student_checkin(
     except Exception:
         pass
 
-    geofence_enabled = geofence_cfg.enabled if geofence_cfg is not None else True
+    # QR attendance is always checked against the live session host location.
+    # The campus-wide admin toggle does not disable this session safety boundary.
 
     distance_m = calculate_haversine_distance(payload.lat, payload.lng, session_lat, session_lng)
-    if geofence_enabled:
-        distance_m = calculate_haversine_distance(
-            payload.lat,
-            payload.lng,
-            session_lat,
-            session_lng
+    distance_m = calculate_haversine_distance(payload.lat, payload.lng, session_lat, session_lng)
+    if distance_m > 200:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Outside allowed check-in radius: {distance_m}m from session (allowed: 200m)."
         )
-        if distance_m > session_radius:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Outside allowed check-in radius: {distance_m}m from session (allowed: {session_radius}m)."
-            )
 
     # 4. Face Recognition & Liveness Matching
     # NOTE: The old `payload.biometricVerified` short-circuit that set

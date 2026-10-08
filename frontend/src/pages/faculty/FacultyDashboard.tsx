@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useAttendance } from '../../context/AttendanceContext';
 import { QRGenerator } from '../../components/qr/QRGenerator';
+import { getCurrentLocation } from '../../utils/gps';
 import { InsertStudentModal } from '../../components/admin/InsertStudentModal';
 import { EditSessionModal } from '../../components/attendance/EditSessionModal';
 import { LiveAttendanceRoster } from '../../components/attendance/LiveAttendanceRoster';
@@ -35,6 +36,7 @@ export const FacultyDashboard: React.FC = () => {
     setIsStartingSession(true);
 
     try {
+    const location = await getCurrentLocation();
     await startSession({
       sessionTitle: `${currentUser.department || "Machine Learning"} Lecture Session`,
       facultyId: currentUser.uid,
@@ -44,9 +46,9 @@ export const FacultyDashboard: React.FC = () => {
       year: 3,
       room: "Innovation Lab 301",
       durationMinutes: 90,
-      radiusMeters: geofence?.radiusMeters || 150,
-      latitude: geofence?.latitude || 17.2472,
-      longitude: geofence?.longitude || 80.1514
+      radiusMeters: 200,
+      latitude: location.latitude,
+      longitude: location.longitude
     });
 
     } catch { /* startSession displays the failure. */ } finally {
