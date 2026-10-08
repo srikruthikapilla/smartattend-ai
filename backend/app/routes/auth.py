@@ -118,6 +118,7 @@ class BulkStudentItem(BaseModel):
     section: Optional[str] = None
     year: Optional[str] = None
     semester: Optional[str] = None
+    phone: Optional[str] = None
     college: Optional[str] = None
     status: Optional[str] = "approved"
 
@@ -691,6 +692,8 @@ def bulk_upsert_users(
 ):
     """Bulk upsert student roster into students table. Requires Admin authorization."""
     success_count = 0
+    added_count = 0
+    duplicate_count = 0
     now_dt = datetime.now(timezone.utc)
 
     for st in payload.students:
@@ -706,8 +709,11 @@ def bulk_upsert_users(
         ).first()
 
         if existing:
+            duplicate_count += 1
             existing.name = st.name
             existing.hall_ticket_no = clean_ht
+            existing.email = clean_email
+            existing.phone = st.phone or existing.phone
             existing.branch = st.branch or existing.branch
             existing.section = st.section or existing.section
             existing.year = st.year or existing.year
@@ -730,10 +736,16 @@ def bulk_upsert_users(
                 updated_at=now_dt
             )
             db.add(new_student)
+            added_count += 1
         success_count += 1
 
     db.commit()
-    return {"success": True, "count": success_count}
+    return {
+        "success": True,
+        "count": success_count,
+        "added_count": added_count,
+        "duplicate_count": duplicate_count,
+    }
 
 
 @router.post("/faculty/bulk")

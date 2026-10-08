@@ -628,7 +628,38 @@ export const AuthProvider: React.FC<{
       status?: StudentStatus;
     }>
   ): Promise<{ addedCount: number; duplicateCount: number; errors: string[] }> => {
-    return { addedCount: 0, duplicateCount: 0, errors: [] };
+    if (students.length === 0) {
+      return { addedCount: 0, duplicateCount: 0, errors: [] };
+    }
+
+    const response = await fetch('/api/auth/users/bulk', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({
+        students: students.map(student => ({
+          name: student.name.trim(),
+          email: student.email.trim().toLowerCase(),
+          hall_ticket_no: student.hallTicketNo.trim().toUpperCase(),
+          branch: student.branch,
+          section: student.section,
+          year: String(student.year),
+          semester: String(student.semester || 1),
+          phone: student.phone || null,
+          status: student.status || 'approved'
+        }))
+      })
+    });
+
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.detail || result.message || 'Bulk student import failed. Please try again.');
+    }
+
+    await refreshUsers();
+    const addedCount = Number(result.added_count ?? result.count ?? 0);
+    const duplicateCount = Number(result.duplicate_count ?? Math.max(0, students.length - addedCount));
+    return { addedCount, duplicateCount, errors: result.errors || [] };
   };
 
   const importStudentsFromExcel = async (
