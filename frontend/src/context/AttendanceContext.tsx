@@ -398,6 +398,7 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       try {
         const res = await fetch('/api/qr-session/start', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             durationMinutes: data.durationMinutes,
@@ -414,7 +415,20 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             radiusMeters: sessionRadius
           })
         });
-        if (!res.ok) throw new Error("Session could not be started. Please sign in again.");
+        if (!res.ok) {
+          const errorBody = await res.json().catch(() => null);
+          const detail = errorBody?.detail;
+          const message = typeof detail === 'string'
+            ? detail
+            : Array.isArray(detail)
+              ? detail.map((item: { msg?: string }) => item.msg || 'Invalid session settings').join('; ')
+              : res.status === 401
+                ? 'Your sign-in session has expired. Please sign in again.'
+                : res.status === 403
+                  ? 'Session start was denied. Check your faculty permissions and campus location.'
+                  : `Session could not be started (HTTP ${res.status}). Please try again.`;
+          throw new Error(message);
+        }
         if (res.ok) {
           const resData = await res.json();
           if (resData.session) {
