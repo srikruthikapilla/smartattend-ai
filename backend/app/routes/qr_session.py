@@ -8,8 +8,7 @@ from sqlalchemy.orm import Session
 from app.config import JWT_SECRET
 from app.database import get_db
 from app.dependencies.auth import require_role
-from app.models.db_models import AttendanceSession, GeofenceConfig
-from app.utils.geofence import calculate_haversine_distance, current_geofence
+from app.models.db_models import AttendanceSession
 from app.models.schemas import QRSessionStartPayload
 from app.routes.auth import _rate_limit
 
@@ -63,20 +62,14 @@ def start_qr_session(payload: QRSessionStartPayload,
     now = datetime.now(timezone.utc)
     if payload.latitude is None or payload.longitude is None:
         raise HTTPException(400, "Current admin or faculty GPS coordinates are required to start a session.")
-    cfg = db.query(GeofenceConfig).filter(GeofenceConfig.id == 1).first()
-    center_lat = cfg.center_lat if cfg else current_geofence["center_lat"]
-    center_lng = cfg.center_lng if cfg else current_geofence["center_lng"]
-    campus_radius = cfg.radius_m if cfg else current_geofence["radius_m"]
-    host_distance = calculate_haversine_distance(payload.latitude, payload.longitude, center_lat, center_lng)
-    if host_distance > campus_radius:
-        raise HTTPException(403, "Faculty device is outside the configured campus geofence.")
+    # Capture the host location at session start; enforce the radius server-side.
     session = AttendanceSession(
         id=uuid.uuid4(), faculty_id=current_user["id"], faculty_name=current_user["name"],
         session_title=payload.sessionTitle, branch=payload.branch, section=payload.section,
         room=payload.room, start_time=now,
         end_time=now + timedelta(minutes=payload.durationMinutes), status="active",
-        radius_meters=min(payload.radiusMeters, campus_radius),
-        geofence={"lat": center_lat, "lng": center_lng})
+        radius_meters=200,
+        geofence={"lat": payload.latitude, "lng": payload.longitude})
     db.add(session)
     db.commit()
     db.refresh(session)
