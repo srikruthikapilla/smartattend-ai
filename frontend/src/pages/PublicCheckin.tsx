@@ -457,6 +457,17 @@ export const PublicCheckin: React.FC = () => {
       const centerLat = Number(geofenceData?.centerLat ?? sessionData?.faculty_lat);
       const centerLng = Number(geofenceData?.centerLng ?? sessionData?.faculty_lng);
       const sessionRadius = Number(geofenceData?.radiusMeters ?? sessionData?.radius_meters ?? 150);
+      const accuracy = Number(pos.coords.accuracy);
+      if (![lat, lng, centerLat, centerLng, sessionRadius, accuracy].every(Number.isFinite)) {
+        setErrorMessage('Location verification data is incomplete. Please retry.');
+        setStep('location_error');
+        return;
+      }
+      if (accuracy > 100) {
+        setErrorMessage(`GPS accuracy is too low (${Math.round(accuracy)}m). Move outdoors or near a window and retry.`);
+        setStep('location_error');
+        return;
+      }
       const distance = calculateDistance(lat, lng, centerLat, centerLng);
       setDistanceMeters(distance);
 

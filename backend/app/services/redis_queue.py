@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
-from app.utils.redis_client import get_redis_client
+from app.utils.redis_client import get_redis_client, mark_redis_failure, is_redis_available
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ def get_cached_student_status(hall_ticket: str) -> Optional[Dict[str, Any]]:
                 return json.loads(val)
     except Exception as e:
         logger.warning(f"[Redis Cache] Get status error for {hall_ticket}: {e}")
+        mark_redis_failure(e)
     return None
 
 
@@ -59,6 +60,7 @@ def set_cached_student_status(hall_ticket: str, data: Dict[str, Any], ttl: int =
             )
     except Exception as e:
         logger.warning(f"[Redis Cache] Set status error for {hall_ticket}: {e}")
+        mark_redis_failure(e)
 
 
 def invalidate_student_cache(hall_ticket: str) -> None:
@@ -70,6 +72,7 @@ def invalidate_student_cache(hall_ticket: str) -> None:
             logger.info(f"[Redis Cache] Invalidated cache for {hall_ticket}")
     except Exception as e:
         logger.warning(f"[Redis Cache] Invalidate error for {hall_ticket}: {e}")
+        mark_redis_failure(e)
 
 
 # ---------------------------------------------------------------------------
@@ -93,12 +96,15 @@ def enqueue_task(task_type: str, payload: Dict[str, Any]) -> None:
             queued_to_redis = True
     except Exception as e:
         logger.warning(f"[Queue] Redis rpush error: {e}")
+        mark_redis_failure(e)
 
-    # Also put in local async queue if not in Redis or for immediate event-loop consumption
-    try:
-        _local_task_queue.put_nowait(message)
-    except Exception:
-        pass
+    # Keep a local copy only when Redis did not accept the task; otherwise the
+    # Redis worker is the single owner and duplicate execution is avoided.
+    if not queued_to_redis:
+        try:
+            _local_task_queue.put_nowait(message)
+        except Exception:
+            pass
 
 
 def enqueue_audit_log(
@@ -166,6 +172,7 @@ async def start_queue_worker(sio=None):
     """
     Background worker task started with FastAPI lifespan.
     Continuously drains tasks from Redis and local queues.
+    Uses non-blocking execution and respects failure cooldown when Redis is unavailable.
     """
     global _worker_running, _sio_ref
     if sio:
@@ -175,25 +182,25 @@ async def start_queue_worker(sio=None):
 
     while _worker_running:
         processed_any = False
-        # 1. Drain Redis tasks if available
-        try:
-            client = get_redis_client()
-            if client:
-                raw_item = client.lpop(REDIS_QUEUE_KEY)
-                if raw_item:
-                    task = json.loads(raw_item)
-                    await _process_task(task)
-                    processed_any = True
-        except Exception as e:
-            logger.debug(f"[Queue Worker] Redis pop note: {e}")
+        # 1. Drain Redis tasks if available and not in failure cooldown
+        if is_redis_available():
+            try:
+                client = get_redis_client()
+                if client:
+                    raw_item = await asyncio.to_thread(client.lpop, REDIS_QUEUE_KEY)
+                    if raw_item:
+                        task = json.loads(raw_item)
+                        await _process_task(task)
+                        processed_any = True
+            except Exception as e:
+                logger.debug(f"[Queue Worker] Redis pop note: {e}")
+                mark_redis_failure(e)
 
         # 2. Drain local memory queue
         while not _local_task_queue.empty():
             try:
                 local_task = _local_task_queue.get_nowait()
-                # If already processed from Redis, skip duplicate execution
-                if not processed_any:
-                    await _process_task(local_task)
+                await _process_task(local_task)
                 _local_task_queue.task_done()
                 processed_any = True
             except asyncio.QueueEmpty:
@@ -202,7 +209,10 @@ async def start_queue_worker(sio=None):
                 logger.error(f"[Queue Worker] Local task error: {e}")
 
         if not processed_any:
-            await asyncio.sleep(0.1)  # 100ms idle poll
+            if not is_redis_available():
+                await asyncio.sleep(1.0)  # Relax poll rate when Redis is in cooldown
+            else:
+                await asyncio.sleep(0.1)  # 100ms idle poll
 
 
 def stop_queue_worker():

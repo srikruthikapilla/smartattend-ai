@@ -167,11 +167,8 @@ def send_otp_email(to_email: str, recipient_name: str, otp_code: str) -> bool:
     clean_email = to_email.strip().lower()
 
     if not BREVO_SMTP_LOGIN or not BREVO_SMTP_KEY:
-        logger.info(
-            f"[Brevo SMTP: DEV MODE] Brevo credentials not configured. "
-            f"OTP for {clean_email} ({recipient_name}): {otp_code}"
-        )
-        return True
+        logger.info("[Brevo SMTP: DEV MODE] SMTP credentials not configured; OTP delivery skipped.")
+        return False
 
     # Validate sender email address
     sender_email = BREVO_FROM_EMAIL.strip() if BREVO_FROM_EMAIL else BREVO_SMTP_LOGIN.strip()
@@ -261,12 +258,12 @@ def send_otp_email(to_email: str, recipient_name: str, otp_code: str) -> bool:
 
         logger.error(f"[Brevo SMTP] Failed to send email to {clean_email} across all ports: {last_error}")
         # Always log OTP in server logs so administrators and users are never locked out
-        logger.warning(f"[Brevo SMTP Fallback] OTP for {clean_email}: {otp_code}")
+        logger.warning("[Brevo SMTP Fallback] OTP delivery failed; code withheld from logs.")
         return False
 
     except Exception as e:
         logger.error(f"[Brevo SMTP] Unexpected error preparing email for {clean_email}: {e}")
-        logger.warning(f"[Brevo SMTP Fallback] OTP for {clean_email}: {otp_code}")
+        logger.warning("[Brevo SMTP Fallback] OTP delivery failed; code withheld from logs.")
         return False
 
 

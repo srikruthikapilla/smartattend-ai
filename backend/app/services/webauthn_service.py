@@ -10,6 +10,7 @@ import base64
 import json
 import logging
 import secrets
+import threading
 from typing import Dict, Any, Optional, Tuple
 
 from app.utils.redis_client import get_redis_client
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Fallback challenge cache if Redis is unavailable
 _memory_challenge_cache: Dict[str, Dict[str, Any]] = {}
+_memory_challenge_lock = threading.Lock()
 
 RP_NAME = "Smart Attend - SBIT Khammam"
 DEFAULT_RP_ID = "localhost"
@@ -44,22 +46,24 @@ def _safe_b64decode(s: str) -> bytes:
     return base64.b64decode(norm)
 
 
-def store_challenge(key: str, challenge_b64: str, ttl_seconds: int = 180) -> None:
+def store_challenge(key: str, challenge_b64: str, ttl_seconds: int = 180) -> bool:
     """Store WebAuthn cryptographic challenge with automatic TTL expiration."""
     client = get_redis_client()
     redis_key = f"webauthn:chal:{key}"
     if client:
         try:
             client.setex(redis_key, ttl_seconds, challenge_b64)
-            return
+            return True
         except Exception as e:
             logger.warning(f"[WebAuthn] Redis challenge store note: {e}")
 
+    from app.config import IS_PRODUCTION
+    if IS_PRODUCTION:
+        return False
     import time
-    _memory_challenge_cache[key] = {
-        "challenge": challenge_b64,
-        "expires_at": time.time() + ttl_seconds
-    }
+    with _memory_challenge_lock:
+        _memory_challenge_cache[key] = {"challenge": challenge_b64, "expires_at": time.time() + ttl_seconds}
+    return True
 
 
 def pop_challenge(key: str) -> Optional[str]:
@@ -73,9 +77,15 @@ def pop_challenge(key: str) -> Optional[str]:
                 return str(val)
         except Exception as e:
             logger.warning(f"[WebAuthn] Redis challenge retrieve note: {e}")
+        else:
+            return None
 
+    from app.config import IS_PRODUCTION
+    if IS_PRODUCTION:
+        return None
     import time
-    item = _memory_challenge_cache.pop(key, None)
+    with _memory_challenge_lock:
+        item = _memory_challenge_cache.pop(key, None)
     if item and time.time() <= item["expires_at"]:
         return item["challenge"]
     return None
@@ -95,7 +105,8 @@ def generate_registration_options(
     challenge_b64 = base64.urlsafe_b64encode(challenge_bytes).decode("utf-8").rstrip("=")
     user_id_b64 = base64.urlsafe_b64encode(user_id.encode("utf-8")).decode("utf-8").rstrip("=")
 
-    store_challenge(f"reg:{user_id}", challenge_b64)
+    if not store_challenge(f"reg:{user_id}:{challenge_b64}", challenge_b64):
+        raise RuntimeError("WebAuthn challenge storage is unavailable.")
 
     return {
         "challenge": challenge_b64,
@@ -133,7 +144,12 @@ def verify_registration_response(
     """
     Verify client registration attestation and store public key metadata.
     """
-    stored_challenge = pop_challenge(f"reg:{user_id}")
+    try:
+        client_data = json.loads(_safe_b64decode(client_data_json))
+        challenge_key = client_data.get("challenge", "")
+    except Exception:
+        challenge_key = ""
+    stored_challenge = pop_challenge(f"reg:{user_id}:{challenge_key}")
     if not stored_challenge:
         return False, {"error": "WebAuthn registration challenge expired or not found. Please try again."}
 
@@ -167,7 +183,8 @@ def generate_authentication_options(
     challenge_bytes = secrets.token_bytes(32)
     challenge_b64 = base64.urlsafe_b64encode(challenge_bytes).decode("utf-8").rstrip("=")
 
-    store_challenge(f"auth:{user_id}", challenge_b64)
+    if not store_challenge(f"auth:{user_id}:{challenge_b64}", challenge_b64):
+        raise RuntimeError("WebAuthn challenge storage is unavailable.")
 
     options: Dict[str, Any] = {
         "challenge": challenge_b64,
@@ -201,7 +218,12 @@ def verify_authentication_response(
     """
     Cryptographically verify WebAuthn assertion signature and prevent replay attacks.
     """
-    stored_challenge = pop_challenge(f"auth:{user_id}")
+    try:
+        client_data = json.loads(_safe_b64decode(client_data_json))
+        challenge_key = client_data.get("challenge", "")
+    except Exception:
+        challenge_key = ""
+    stored_challenge = pop_challenge(f"auth:{user_id}:{challenge_key}")
     if not stored_challenge:
         return False, {"error": "WebAuthn authentication challenge expired or already consumed."}
 

@@ -12,6 +12,7 @@ import jwt
 import secrets
 import hashlib
 import base64
+import math
 from fastapi import APIRouter, HTTPException, Body, Depends, Security, Request
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
@@ -36,9 +37,9 @@ from app.utils.face_matcher import compare_face_embeddings, valid_face_vector
 from app.utils.blink_detection import verify_live_blink
 from app.database import get_db, get_db_context
 from app.dependencies.auth import verify_edge_key, get_current_user, get_optional_current_user, require_role, require_student_report
-from app.routes.auth import _rate_limit
+from app.routes.auth import _rate_limit, _get_hall_ticket_rate_limit_key, get_checkin_rate_limit_key
 from app.services.face_recognition_service import face_service
-from app.utils.redis_client import set_otp, get_otp, delete_otp, consume_otp
+from app.utils.redis_client import set_otp, get_otp, delete_otp, consume_otp, claim_once
 from app.services.redis_queue import (
     get_cached_student_status,
     set_cached_student_status,
@@ -112,7 +113,7 @@ def validate_checkin_session(token: str, db: Session = Depends(get_db)):
 
 
 @router.get("/api/student/check-status/{hall_ticket}")
-@_rate_limit("10/minute")
+@_rate_limit("10/minute", key_func=_get_hall_ticket_rate_limit_key)
 def get_student_enrollment_status(request: Request, hall_ticket: str, db: Session = Depends(get_db)):
     """
     Public endpoint: Checks whether a student with Hall Ticket No (2XXXXXXXXX)
@@ -260,14 +261,15 @@ def clear_all_registered_biometrics(db: Session = Depends(get_db)):
 
 
 @router.get("/api/checkin/challenge")
-@_rate_limit("30/minute")
+@_rate_limit("300/minute")
 def get_checkin_challenge(request: Request):
     """
     Issues a cryptographically random single-use liveness challenge nonce.
     Binds live camera frames and prevents replay of forged telemetry arrays.
     """
     challenge = secrets.token_urlsafe(32)
-    set_otp(f"checkin_challenge:{challenge}", "1", ttl_seconds=60)
+    if not set_otp(f"checkin_challenge:{challenge}", "1", ttl_seconds=60):
+        raise HTTPException(status_code=503, detail="Challenge service is temporarily unavailable. Please retry.")
     return {
         "success": True,
         "challenge": challenge,
@@ -276,7 +278,7 @@ def get_checkin_challenge(request: Request):
 
 
 @router.post("/api/student/register-biometrics")
-@_rate_limit("10/minute")
+@_rate_limit("10/minute", key_func=_get_hall_ticket_rate_limit_key)
 def register_student_biometrics(
     request: Request,
     payload: Dict[str, Any] = Body(...),
@@ -367,6 +369,13 @@ def register_student_biometrics(
                 detail=f"Face biometrics are already enrolled for {ht}. To re-register, use the 'Re-enroll Face' option first or contact your faculty."
             )
 
+    if not is_staff:
+        claim_result = claim_once(f"used_enrollment:{token_hash}")
+        if claim_result is None:
+            raise HTTPException(status_code=503, detail="Enrollment verification is temporarily unavailable. Please retry.")
+        if not claim_result:
+            raise HTTPException(403, "This enrollment token has already been used. Please request a new verification code.")
+
     profile_dict = {
         "name": student_name,
         "hallTicketNo": ht,
@@ -425,8 +434,7 @@ def register_student_biometrics(
         logger.warning(f"PostgreSQL student biometric update note: {e}")
         raise HTTPException(status_code=500, detail="Could not persist student biometrics. Please try again.")
 
-    if not is_staff:
-        set_otp(f"used_enrollment:{token_hash}", "1", ttl_seconds=3600)
+    # Token was atomically claimed above; do not write a second replay marker.
     student_face_cache[ht] = {"descriptor": face_descriptor, "updatedAt": now_dt.isoformat()}
     face_service.register_embedding(ht, face_descriptor, student.name, str(student.id))
 
@@ -537,7 +545,7 @@ def get_student_attendance_history(hall_ticket: str, db: Session = Depends(get_d
 
 
 @router.post("/api/checkin/verify")
-@_rate_limit("5/minute")
+@_rate_limit("12/minute", key_func=get_checkin_rate_limit_key)
 async def verify_student_checkin(
     request: Request,
     payload: VerifyCheckinPayload,
@@ -630,12 +638,17 @@ async def verify_student_checkin(
     # QR attendance is always checked against the live session host location.
     # The campus-wide admin toggle does not disable this session safety boundary.
 
+    if not all(map(math.isfinite, (float(payload.lat), float(payload.lng), float(session_lat), float(session_lng)))):
+        raise HTTPException(400, "Invalid GPS coordinates.")
+    if not (-90 <= payload.lat <= 90 and -180 <= payload.lng <= 180):
+        raise HTTPException(400, "GPS coordinates are out of range.")
+    if not math.isfinite(float(session_radius)) or session_radius <= 0:
+        raise HTTPException(503, "Attendance session location is not configured correctly.")
     distance_m = calculate_haversine_distance(payload.lat, payload.lng, session_lat, session_lng)
-    distance_m = calculate_haversine_distance(payload.lat, payload.lng, session_lat, session_lng)
-    if distance_m > 200:
+    if distance_m > session_radius:
         raise HTTPException(
             status_code=403,
-            detail=f"Outside allowed check-in radius: {distance_m}m from session (allowed: 200m)."
+            detail=f"Outside allowed check-in radius: {distance_m}m from session (allowed: {session_radius}m)."
         )
 
     # 4. Face Recognition & Liveness Matching
@@ -654,8 +667,8 @@ async def verify_student_checkin(
     if payload.webauthnAssertion:
         # Cryptographic Server-Side WebAuthn FIDO2 Assertion Verification
         from app.services.webauthn_service import verify_authentication_response
-        student_rec = db.query(Student).filter(Student.hall_ticket_no == hall_ticket).first()
-        if not student_rec or not student_rec.biometric_credential_id:
+        student_rec = db.query(Student).filter(Student.hall_ticket_no == hall_ticket).populate_existing().with_for_update().first()
+        if not student_rec or student_rec.status != "approved" or not student_rec.biometric_credential_id:
             raise HTTPException(
                 status_code=403,
                 detail=f"No enrolled WebAuthn hardware authenticator found for {hall_ticket}. Please enroll a passkey first."

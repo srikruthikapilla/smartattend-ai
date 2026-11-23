@@ -25,10 +25,9 @@ current_geofence = {
 }
 
 def update_geofence(lat: float, lng: float, radius_m: int):
-    global current_geofence
-    current_geofence = {
+    current_geofence.update({
         "id": 1,
         "center_lat": lat,
         "center_lng": lng,
         "radius_m": radius_m
-    }
+    })

@@ -22,7 +22,7 @@ from app.services.webauthn_service import (
     generate_authentication_options,
     verify_authentication_response
 )
-from app.routes.auth import _rate_limit
+from app.routes.auth import _rate_limit, _get_hall_ticket_rate_limit_key
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ class AuthVerifyRequest(BaseModel):
 
 def authorize_registration(payload, caller, db):
     ht = payload.hallTicketNo.strip().upper()
-    student = db.query(Student).filter(Student.hall_ticket_no == ht).first()
+    student = db.query(Student).filter(Student.hall_ticket_no == ht).populate_existing().with_for_update().first()
     if not student or student.status != "approved":
         raise HTTPException(403, "An approved student account is required.")
     if not caller or caller["role"] not in ("admin", "faculty"):
@@ -82,7 +82,7 @@ def trusted_origin(request):
 
 
 @router.post("/register-options")
-@_rate_limit("10/minute")
+@_rate_limit("10/minute", key_func=_get_hall_ticket_rate_limit_key)
 def get_register_options(
     request: Request,
     payload: RegisterOptionsRequest,
@@ -98,17 +98,20 @@ def get_register_options(
     student_email = payload.email or (student.email if student and student.email else None)
 
     origin = trusted_origin(request)
-    options = generate_registration_options(
-        user_id=ht,
-        user_name=student_name,
-        user_email=student_email or ht.lower(),
-        origin=origin
-    )
+    try:
+        options = generate_registration_options(
+            user_id=ht,
+            user_name=student_name,
+            user_email=student_email or ht.lower(),
+            origin=origin
+        )
+    except RuntimeError:
+        raise HTTPException(503, "Passkey service is temporarily unavailable. Please retry.")
     return {"success": True, "options": options}
 
 
 @router.post("/register-verify")
-@_rate_limit("10/minute")
+@_rate_limit("10/minute", key_func=_get_hall_ticket_rate_limit_key)
 def verify_registration(
     request: Request,
     payload: RegisterVerifyRequest,
@@ -132,9 +135,11 @@ def verify_registration(
     if not valid:
         raise HTTPException(status_code=400, detail=result.get("error", "WebAuthn registration failed."))
 
-    student = db.query(Student).filter(Student.hall_ticket_no == ht).first()
+    student = db.query(Student).filter(Student.hall_ticket_no == ht).populate_existing().with_for_update().first()
     if not student or student.status != "approved":
         raise HTTPException(403, "Approved student account no longer available.")
+    if student.biometric_public_key:
+        raise HTTPException(409, "A passkey was enrolled by another request. Ask staff to reset it first.")
 
     student.biometric_credential_id = result["credentialId"]
     student.biometric_public_key = result["publicKey"]
@@ -152,7 +157,7 @@ def verify_registration(
 
 
 @router.post("/auth-options")
-@_rate_limit("10/minute")
+@_rate_limit("10/minute", key_func=_get_hall_ticket_rate_limit_key)
 def get_auth_options(
     request: Request,
     payload: AuthOptionsRequest,
@@ -165,16 +170,19 @@ def get_auth_options(
     credential_id = student.biometric_credential_id if student else None
     origin = trusted_origin(request)
 
-    options = generate_authentication_options(
-        user_id=ht,
-        credential_id=credential_id,
-        origin=origin
-    )
+    try:
+        options = generate_authentication_options(
+            user_id=ht,
+            credential_id=credential_id,
+            origin=origin
+        )
+    except RuntimeError:
+        raise HTTPException(503, "Passkey service is temporarily unavailable. Please retry.")
     return {"success": True, "options": options}
 
 
 @router.post("/auth-verify")
-@_rate_limit("10/minute")
+@_rate_limit("10/minute", key_func=_get_hall_ticket_rate_limit_key)
 def verify_authentication(
     request: Request,
     payload: AuthVerifyRequest,
@@ -182,9 +190,9 @@ def verify_authentication(
 ):
     """Cryptographically verify student's hardware signature and anti-replay counter."""
     ht = payload.hallTicketNo.strip().upper()
-    student = db.query(Student).filter(Student.hall_ticket_no == ht).first()
+    student = db.query(Student).filter(Student.hall_ticket_no == ht).populate_existing().with_for_update().first()
 
-    if not student or not student.biometric_credential_id:
+    if not student or student.status != "approved" or not student.biometric_credential_id:
         raise HTTPException(
             status_code=403,
             detail=f"No hardware biometric credential found for {ht}. Please register your device first."

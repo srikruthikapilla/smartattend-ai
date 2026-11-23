@@ -2,19 +2,27 @@ import React, { useState } from 'react';
 import { useAttendance } from '../context/AttendanceContext';
 import { AttendanceCharts } from '../components/analytics/AttendanceCharts';
 import { StatCard } from '../components/common/StatCard';
-import { BarChart3, TrendingUp, TrendingDown, Percent, Sparkles, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { BarChart3, TrendingUp, TrendingDown, Percent, Sparkles, CheckCircle2 } from 'lucide-react';
+import { getAcademicGroups, normalizeAcademicValue } from '../utils/academicGrouping';
 
 export const AnalyticsPage: React.FC = () => {
   const { attendanceRecords, seedDemoAttendance } = useAttendance();
 
   const [timeframe, setTimeframe] = useState<'daily' | 'weekly' | 'monthly' | 'yearly'>('monthly');
   const [selectedBranch, setSelectedBranch] = useState<string>('all');
+  const [selectedSection, setSelectedSection] = useState<string>('all');
+
+  const availableBranches = Array.from(new Set(attendanceRecords.map(r => normalizeAcademicValue(r.branch)).filter(Boolean))).sort();
+  const availableSections = Array.from(new Set(attendanceRecords
+    .filter(r => selectedBranch === 'all' || normalizeAcademicValue(r.branch) === selectedBranch)
+    .map(r => normalizeAcademicValue(r.section)).filter(Boolean))).sort();
   const [seedNotice, setSeedNotice] = useState<string | null>(null);
 
   // Timeframe and branch filtering
   const now = new Date();
   const filtered = attendanceRecords.filter(r => {
-    if (selectedBranch !== 'all' && r.branch !== selectedBranch) return false;
+    if (selectedBranch !== 'all' && normalizeAcademicValue(r.branch) !== selectedBranch) return false;
+    if (selectedSection !== 'all' && normalizeAcademicValue(r.section) !== selectedSection) return false;
 
     const recordDate = new Date(r.markedAt);
     if (timeframe === 'daily') {
@@ -39,23 +47,18 @@ export const AnalyticsPage: React.FC = () => {
   const absent = filtered.filter(r => r.status === 'absent').length;
   const rate = total > 0 ? Math.round(((present + late) / total) * 100) : 0;
 
-  // Dynamically compute Highest & Lowest Performing Branches across all records
-  const branches = ['CSE', 'AI', 'DS'];
-  const branchStats = branches.map(b => {
-    const bRecs = attendanceRecords.filter(r => r.branch === b);
-    const bTotal = bRecs.length;
-    const bPresent = bRecs.filter(r => r.status === 'present' || r.status === 'late').length;
-    const bRate = bTotal > 0 ? Math.round((bPresent / bTotal) * 100) : null;
-    return { branch: b, total: bTotal, rate: bRate };
-  }).filter(b => b.rate !== null);
-
+  const branchStats = getAcademicGroups(filtered, r => r.branch, r => r.section).map(group => {
+    const records = filtered.filter(r => normalizeAcademicValue(r.branch) === group.branch && normalizeAcademicValue(r.section) === group.section);
+    const attended = records.filter(r => r.status === 'present' || r.status === 'late').length;
+    return { label: `${group.branch} / ${group.section}`, rate: Math.round((attended / records.length) * 100) };
+  });
   let highestBranchText = 'No Data';
   let lowestBranchText = 'No Data';
 
   if (branchStats.length > 0) {
     branchStats.sort((a, b) => (b.rate ?? 0) - (a.rate ?? 0));
-    highestBranchText = `${branchStats[0].branch} (${branchStats[0].rate}%)`;
-    lowestBranchText = `${branchStats[branchStats.length - 1].branch} (${branchStats[branchStats.length - 1].rate}%)`;
+    highestBranchText = `${branchStats[0].label} (${branchStats[0].rate}%)`;
+    lowestBranchText = `${branchStats[branchStats.length - 1].label} (${branchStats[branchStats.length - 1].rate}%)`;
   }
 
   const handleSeedDemoData = () => {
@@ -109,13 +112,22 @@ export const AnalyticsPage: React.FC = () => {
 
           <select
             value={selectedBranch}
-            onChange={(e) => setSelectedBranch(e.target.value)}
+            onChange={(e) => { setSelectedBranch(e.target.value); setSelectedSection('all'); }}
             className="px-3.5 py-2 rounded-xl bg-white dark:bg-surface-card-dark border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white text-xs font-medium focus:outline-none focus:border-accent font-heading"
           >
             <option value="all">All Branches</option>
-            {['CSE', 'AI', 'DS'].map(b => (
+            {availableBranches.map(b => (
               <option key={b} value={b}>{b} Department</option>
             ))}
+          </select>
+
+          <select
+            value={selectedSection}
+            onChange={(e) => setSelectedSection(e.target.value)}
+            className="px-3.5 py-2 rounded-xl bg-white dark:bg-surface-card-dark border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white text-xs font-medium focus:outline-none focus:border-accent font-heading"
+          >
+            <option value="all">All Sections</option>
+            {availableSections.map(section => <option key={section} value={section}>Section {section}</option>)}
           </select>
 
           <button
@@ -134,7 +146,7 @@ export const AnalyticsPage: React.FC = () => {
         <StatCard
           title="Overall Attendance Rate"
           value={`${rate}%`}
-          subtitle={selectedBranch === 'all' ? `${timeframe} Average` : `${selectedBranch} • ${timeframe}`}
+          subtitle={`${selectedBranch === 'all' ? 'All Branches' : selectedBranch} / ${selectedSection === 'all' ? 'All Sections' : `Section ${selectedSection}`} / ${timeframe}`}
           icon={Percent}
           color="purple"
         />
@@ -146,14 +158,14 @@ export const AnalyticsPage: React.FC = () => {
           color="blue"
         />
         <StatCard
-          title="Highest Branch"
+          title="Top Branch / Section"
           value={highestBranchText}
           subtitle="Top Performing"
           icon={TrendingUp}
           color="emerald"
         />
         <StatCard
-          title="Lowest Branch"
+          title="Needs Attention"
           value={lowestBranchText}
           subtitle="Needs Followup"
           icon={TrendingDown}

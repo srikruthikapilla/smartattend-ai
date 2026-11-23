@@ -84,6 +84,9 @@ fastapi_app.add_middleware(
 
 @fastapi_app.middleware("http")
 async def browser_security(request: Request, call_next):
+    request.state.view_rate_limit = None
+    if request.method in ("POST", "PUT", "PATCH") and "application/json" in request.headers.get("content-type", ""):
+        await request.body()
     origin = request.headers.get("origin")
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         if (origin and origin not in CORS_ORIGINS) or request.headers.get("sec-fetch-site") == "cross-site":

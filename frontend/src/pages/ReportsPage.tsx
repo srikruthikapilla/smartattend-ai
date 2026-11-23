@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useAttendance } from '../context/AttendanceContext';
 import { generateAttendancePDF } from '../utils/pdfGenerator';
 import { exportAttendanceToExcel, exportAttendanceToCSV } from '../utils/excelGenerator';
-import { FileSpreadsheet, FileText, Download, Search, CheckCircle2 } from 'lucide-react';
+import { FileSpreadsheet, FileText, Download, Search, RotateCcw, Users } from 'lucide-react';
+import { getAcademicGroups, normalizeAcademicValue } from '../utils/academicGrouping';
 
 export const ReportsPage: React.FC = () => {
   const { attendanceRecords } = useAttendance();
@@ -12,17 +13,39 @@ export const ReportsPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [search, setSearch] = useState<string>('');
 
+  const availableBranches = Array.from(new Set(
+    attendanceRecords.map(record => normalizeAcademicValue(record.branch)).filter(Boolean)
+  )).sort();
+  const availableSections = Array.from(new Set(
+    attendanceRecords
+      .filter(record => selectedBranch === 'all' || normalizeAcademicValue(record.branch) === selectedBranch)
+      .map(record => normalizeAcademicValue(record.section))
+      .filter(Boolean)
+  )).sort();
+
   const filteredRecords = attendanceRecords.filter(rec => {
-    if (selectedBranch !== 'all' && rec.branch !== selectedBranch) return false;
-    if (selectedSection !== 'all' && rec.section !== selectedSection) return false;
+    if (selectedBranch !== 'all' && normalizeAcademicValue(rec.branch) !== selectedBranch) return false;
+    if (selectedSection !== 'all' && normalizeAcademicValue(rec.section) !== selectedSection) return false;
     if (statusFilter !== 'all' && rec.status !== statusFilter) return false;
-    const q = search.toLowerCase();
+    const q = search.trim().toLowerCase();
     return (
       rec.studentName.toLowerCase().includes(q) ||
       rec.hallTicketNo.toLowerCase().includes(q) ||
+      normalizeAcademicValue(rec.branch).toLowerCase().includes(q) ||
+      normalizeAcademicValue(rec.section).toLowerCase().includes(q) ||
       (rec.sessionTitle && rec.sessionTitle.toLowerCase().includes(q))
     );
   });
+
+  const academicGroups = getAcademicGroups(filteredRecords, record => record.branch, record => record.section);
+  const clearFilters = () => {
+    setSelectedBranch('all');
+    setSelectedSection('all');
+    setStatusFilter('all');
+    setSearch('');
+  };
+  const exportName = ['SBIT_Attendance', selectedBranch !== 'all' ? selectedBranch : '', selectedSection !== 'all' ? `Section_${selectedSection}` : '']
+    .filter(Boolean).join('_');
 
   const handleExportPDF = () => {
     generateAttendancePDF(filteredRecords, {
@@ -32,11 +55,11 @@ export const ReportsPage: React.FC = () => {
   };
 
   const handleExportExcel = () => {
-    exportAttendanceToExcel(filteredRecords, 'SBIT_Campus_Attendance');
+    exportAttendanceToExcel(filteredRecords, exportName);
   };
 
   const handleExportCSV = () => {
-    exportAttendanceToCSV(filteredRecords, 'SBIT_Campus_Attendance');
+    exportAttendanceToCSV(filteredRecords, exportName);
   };
 
   return (
@@ -87,7 +110,7 @@ export const ReportsPage: React.FC = () => {
       </div>
 
       {/* Filter Controls Bar */}
-      <div className="card-elevation p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="card-elevation p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[minmax(220px,1.5fr)_repeat(3,minmax(150px,1fr))_auto] gap-4 items-end">
         <div>
           <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">Search Keyword</label>
           <div className="relative">
@@ -106,11 +129,11 @@ export const ReportsPage: React.FC = () => {
           <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">Branch</label>
           <select
             value={selectedBranch}
-            onChange={(e) => setSelectedBranch(e.target.value)}
+            onChange={(e) => { setSelectedBranch(e.target.value); setSelectedSection('all'); }}
             className="input-premium text-xs"
           >
             <option value="all">All Branches</option>
-            {['CSE', 'AI', 'DS'].map(b => (
+            {availableBranches.map(b => (
               <option key={b} value={b}>{b} Department</option>
             ))}
           </select>
@@ -124,7 +147,7 @@ export const ReportsPage: React.FC = () => {
             className="input-premium text-xs"
           >
             <option value="all">All Sections</option>
-            {['A', 'B', 'C', 'D'].map(sec => (
+            {availableSections.map(sec => (
               <option key={sec} value={sec}>Section {sec}</option>
             ))}
           </select>
@@ -143,6 +166,29 @@ export const ReportsPage: React.FC = () => {
             <option value="absent">Absent Only</option>
           </select>
         </div>
+
+        <button
+          type="button"
+          onClick={clearFilters}
+          className="btn-outline h-10 justify-center"
+          title="Clear branch, section, status, and search filters"
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+          <span>Reset</span>
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+        <div className="card-elevation p-4 flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-accent-muted text-accent flex items-center justify-center"><Users className="w-4 h-4" /></div>
+          <div><p className="text-[11px] uppercase tracking-wide text-slate-500">Filtered records</p><p className="text-xl font-bold text-slate-900 dark:text-white">{filteredRecords.length}</p></div>
+        </div>
+        {academicGroups.slice(0, 3).map(group => (
+          <div key={`${group.branch}-${group.section}`} className="card-elevation p-4 flex items-center justify-between gap-3">
+            <div><p className="text-[11px] uppercase tracking-wide text-slate-500">{group.branch} · Section {group.section}</p><p className="text-xs text-slate-500 mt-1">Separate cohort</p></div>
+            <span className="text-xl font-bold text-slate-900 dark:text-white">{group.count}</span>
+          </div>
+        ))}
       </div>
 
       {/* Reports Table View */}
@@ -152,7 +198,7 @@ export const ReportsPage: React.FC = () => {
             Matching Records ({filteredRecords.length})
           </h3>
           <span className="text-xs text-slate-500 dark:text-slate-400">
-            Showing all verified logs
+            {selectedBranch === 'all' ? 'All branches' : selectedBranch}{selectedSection === 'all' ? ' · All sections' : ` · Section ${selectedSection}`}
           </span>
         </div>
 
@@ -162,7 +208,8 @@ export const ReportsPage: React.FC = () => {
               <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 uppercase tracking-wider font-semibold text-[11px]">
                 <th className="py-3 px-4">Student</th>
                 <th className="py-3 px-4">Hall Ticket No</th>
-                <th className="py-3 px-4">Branch/Sec</th>
+                <th className="py-3 px-4">Branch</th>
+                <th className="py-3 px-4">Section</th>
                 <th className="py-3 px-4">Session Title</th>
                 <th className="py-3 px-4">Faculty</th>
                 <th className="py-3 px-4">Verification</th>
@@ -173,7 +220,7 @@ export const ReportsPage: React.FC = () => {
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-300">
               {filteredRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                  <td colSpan={9} className="py-12 text-center text-slate-400">
                     No attendance records match the selected criteria.
                   </td>
                 </tr>
@@ -182,7 +229,8 @@ export const ReportsPage: React.FC = () => {
                   <tr key={rec.recordId} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition">
                     <td className="py-3 px-4 font-semibold text-slate-900 dark:text-white">{rec.studentName}</td>
                     <td className="py-3 px-4 font-mono text-teal-600 dark:text-teal-400">{rec.hallTicketNo}</td>
-                    <td className="py-3 px-4">{rec.branch} - {rec.section}</td>
+                    <td className="py-3 px-4"><span className="inline-flex px-2 py-1 rounded-md bg-slate-100 dark:bg-slate-800 font-semibold">{normalizeAcademicValue(rec.branch) || 'Unassigned'}</span></td>
+                    <td className="py-3 px-4"><span className="inline-flex px-2 py-1 rounded-md bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-semibold">{normalizeAcademicValue(rec.section) ? `Section ${normalizeAcademicValue(rec.section)}` : 'Unassigned'}</span></td>
                     <td className="py-3 px-4">{rec.sessionTitle || `${rec.branch} Session`}</td>
                     <td className="py-3 px-4 text-slate-500 dark:text-slate-400">{rec.facultyName || 'Faculty'}</td>
                     <td className="py-3 px-4 font-mono text-[11px]">

@@ -13,6 +13,7 @@ import time
 import uuid
 import logging
 import re
+import json
 from typing import Optional, Dict, List, Any
 from datetime import datetime, timezone
 
@@ -27,7 +28,7 @@ from app.database import get_db
 from app.dependencies.auth import get_current_user, get_optional_current_user, require_role
 from app.models.db_models import Admin, Faculty, Student, AttendanceRecord, AuditLog
 from app.utils.security import hash_password, verify_password, credential_version
-from app.utils.redis_client import set_otp, get_otp, delete_otp
+from app.utils.redis_client import set_otp, consume_otp
 from app.utils.email_service import send_otp_email
 
 logger = logging.getLogger(__name__)
@@ -38,18 +39,84 @@ logger = logging.getLogger(__name__)
 try:
     from slowapi import Limiter  # type: ignore
     from slowapi.util import get_remote_address  # type: ignore
-    from app.config import REDIS_URL
-    _limiter = Limiter(key_func=get_remote_address, storage_uri=REDIS_URL,
-                       in_memory_fallback_enabled=True, swallow_errors=False)
+    from app.config import REDIS_URL, REDIS_CONNECT_TIMEOUT, REDIS_SOCKET_TIMEOUT
+    _limiter = Limiter(
+        key_func=get_remote_address,
+        storage_uri=REDIS_URL,
+        storage_options={
+            "socket_connect_timeout": REDIS_CONNECT_TIMEOUT,
+            "socket_timeout": REDIS_SOCKET_TIMEOUT,
+        },
+        in_memory_fallback_enabled=True,
+        swallow_errors=True
+    )
     _RATE_LIMIT_AVAILABLE = True
 except ImportError:
     _limiter = None
     _RATE_LIMIT_AVAILABLE = False
 
-def _rate_limit(limit_string: str):
+
+def _get_email_rate_limit_key(request: Request) -> str:
+    """
+    Extract email identifier for rate limiting OTP & auth requests.
+    Prevents false 429 rate limit collisions for distinct users on shared campus Wi-Fi / NAT.
+    """
+    try:
+        body = getattr(request, "_body", None)
+        if body:
+            data = json.loads(body)
+            email = data.get("email")
+            if email and isinstance(email, str):
+                return f"email:{email.strip().lower()}"
+    except Exception:
+        pass
+    email_param = request.query_params.get("email")
+    if email_param:
+        return f"email:{email_param.strip().lower()}"
+    return get_remote_address(request)
+
+
+def _get_hall_ticket_rate_limit_key(request: Request) -> str:
+    """
+    Extract hall ticket identifier for rate limiting enrollment OTP requests.
+    Prevents false 429 rate limit collisions for distinct students on shared campus Wi-Fi / NAT.
+    """
+    try:
+        body = getattr(request, "_body", None)
+        if body:
+            data = json.loads(body)
+            ht = data.get("hall_ticket_no") or data.get("hallTicketNo") or data.get("hallTicket")
+            if ht and isinstance(ht, str):
+                return f"ht:{ht.strip().upper()}"
+    except Exception:
+        pass
+    ht_param = request.query_params.get("hall_ticket_no")
+    if ht_param:
+        return f"ht:{ht_param.strip().upper()}"
+    path_ticket = request.url.path.rstrip("/").rsplit("/", 1)[-1]
+    if re.fullmatch(r"2[0-9A-Za-z]{8,9}", path_ticket):
+        return f"ht:{path_ticket.upper()}"
+    return get_remote_address(request)
+
+def get_checkin_rate_limit_key(request: Request) -> str:
+    """Rate-limit check-ins per student, avoiding campus NAT collisions."""
+    try:
+        body = getattr(request, "_body", None)
+        if body:
+            data = json.loads(body)
+            hall = data.get("hallTicket") or data.get("hall_ticket") or "unknown"
+            return f"checkin:{str(hall).strip().upper()}"
+    except Exception:
+        pass
+    return get_remote_address(request)
+
+
+def _rate_limit(limit_string: str, key_func=None):
     """Decorator factory that applies rate limiting when slowapi is available."""
     def decorator(func):
         if _RATE_LIMIT_AVAILABLE and _limiter:
+            if key_func is not None:
+                return _limiter.limit(limit_string, key_func=key_func)(func)
             return _limiter.limit(limit_string)(func)
         return func
     return decorator
@@ -807,8 +874,8 @@ def bulk_upsert_faculty(
 # ── Password Reset Flow (Faculty & Admin Only, with Redis TTL & Brevo SMTP) ──
 
 @router.post("/request-reset")
-@_rate_limit("3/minute")
-def request_password_reset(request: Request, payload: RequestResetRequest, db: Session = Depends(get_db)):
+@_rate_limit("5/minute", key_func=_get_email_rate_limit_key)
+def request_password_reset(request: Request, response: Response, payload: RequestResetRequest, db: Session = Depends(get_db)):
     """
     Initiate password reset for Faculty or Admin:
     1. Look up user in Admins or Faculty.
@@ -837,10 +904,12 @@ def request_password_reset(request: Request, payload: RequestResetRequest, db: S
     otp_code = f"{secrets.randbelow(900000) + 100000}"
 
     # Store in Redis with 10-minute (600s) TTL
-    set_otp(clean_email, otp_code, ttl_seconds=600)
+    if not set_otp(clean_email, otp_code, ttl_seconds=600):
+        raise HTTPException(status_code=503, detail="Verification service is temporarily unavailable. Please try again later.")
 
     # Send email via Brevo SMTP
-    send_otp_email(clean_email, user.name, otp_code)
+    if not send_otp_email(clean_email, user.name, otp_code):
+        raise HTTPException(status_code=503, detail="Unable to dispatch verification code. Please try again later.")
 
     return {
         "success": True,
@@ -851,26 +920,12 @@ def request_password_reset(request: Request, payload: RequestResetRequest, db: S
 
 
 @router.post("/reset-password")
-@_rate_limit("10/minute")
-def reset_password(request: Request, payload: VerifyAndResetRequest, db: Session = Depends(get_db)):
+@_rate_limit("10/minute", key_func=_get_email_rate_limit_key)
+def reset_password(request: Request, response: Response, payload: VerifyAndResetRequest, db: Session = Depends(get_db)):
     """
     Verify 6-digit OTP against Redis and update password in Admins or Faculty table.
     """
     clean_email = payload.email.strip().lower()
-    stored_otp = get_otp(clean_email)
-
-    if not stored_otp:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No active password reset request found or verification code has expired. Please request a new code."
-        )
-
-    if str(payload.otp).strip() != str(stored_otp).strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid verification code."
-        )
-
     if len(payload.new_password) < 8:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -885,12 +940,13 @@ def reset_password(request: Request, payload: VerifyAndResetRequest, db: Session
     if not user:
         raise HTTPException(status_code=404, detail="Account not found.")
 
+    if not consume_otp(clean_email, str(payload.otp).strip()):
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
+
     user.password_hash = hash_password(payload.new_password)
     user.updated_at = datetime.now(timezone.utc)
     db.commit()
 
-    # Delete OTP from Redis
-    delete_otp(clean_email)
 
     return {
         "success": True,
@@ -933,9 +989,10 @@ def admin_direct_reset(
 # ── Student Enrollment OTP Verification ──
 
 @router.post("/student/enrollment/request-otp")
-@_rate_limit("3/minute")
+@_rate_limit("5/minute", key_func=_get_hall_ticket_rate_limit_key)
 def request_student_enrollment_otp(
     request: Request,
+    response: Response,
     payload: StudentEnrollmentOTPRequest,
     db: Session = Depends(get_db)
 ):
@@ -979,10 +1036,12 @@ def request_student_enrollment_otp(
 
     # Store in Redis with 10-minute (600s) TTL using hall ticket as key
     otp_key = f"enrollment_otp:{clean_ht}"
-    set_otp(otp_key, otp_code, ttl_seconds=600)
+    if not set_otp(otp_key, otp_code, ttl_seconds=600):
+        raise HTTPException(status_code=503, detail="Verification service is temporarily unavailable. Please try again later.")
 
     # Send email via Brevo SMTP
-    send_otp_email(student.email, student.name, otp_code)
+    if not send_otp_email(student.email, student.name, otp_code):
+        raise HTTPException(status_code=503, detail="Unable to dispatch verification code. Please try again later.")
 
     logger.info(f"[Enrollment OTP] Sent enrollment OTP for {clean_ht} to {student.email}")
 
@@ -995,9 +1054,10 @@ def request_student_enrollment_otp(
 
 
 @router.post("/student/enrollment/verify-otp")
-@_rate_limit("10/minute")
+@_rate_limit("10/minute", key_func=_get_hall_ticket_rate_limit_key)
 def verify_student_enrollment_otp(
     request: Request,
+    response: Response,
     payload: VerifyEnrollmentOTPRequest,
     db: Session = Depends(get_db)
 ):
@@ -1007,20 +1067,6 @@ def verify_student_enrollment_otp(
     """
     clean_ht = payload.hall_ticket_no.strip().upper()
     otp_key = f"enrollment_otp:{clean_ht}"
-    stored_otp = get_otp(otp_key)
-
-    if not stored_otp:
-        raise HTTPException(
-            status_code=400,
-            detail="No active enrollment request found or verification code has expired. Please request a new code."
-        )
-
-    if str(payload.otp).strip() != str(stored_otp).strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid verification code."
-        )
-
     # Verify student exists
     student = db.query(Student).filter(
         func.upper(Student.hall_ticket_no) == clean_ht
@@ -1032,8 +1078,10 @@ def verify_student_enrollment_otp(
             detail="Student record not found."
         )
 
+    if not consume_otp(otp_key, str(payload.otp).strip()):
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code.")
+
     # Delete OTP from Redis after successful verification
-    delete_otp(otp_key)
 
     # Generate temporary enrollment token (valid for 30 minutes)
     enrollment_token_payload = {

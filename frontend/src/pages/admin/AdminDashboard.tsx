@@ -13,6 +13,7 @@ import { AdminModal } from '../../components/admin/AdminModal';
 import { StatCard } from '../../components/common/StatCard';
 import { UserProfile } from '../../types/auth';
 import { AttendanceRecord } from '../../types/attendance';
+import { normalizeAcademicValue } from '../../utils/academicGrouping';
 import {
   Users, UserCheck, Search, MapPin, PlusCircle, ShieldCheck,
   Download, TrendingUp, TrendingDown, Radio,
@@ -29,6 +30,7 @@ export const AdminDashboard: React.FC = () => {
   const [facultySearch, setFacultySearch] = useState('');
   const [studentSearch, setStudentSearch] = useState('');
   const [selectedBranchFilter, setSelectedBranchFilter] = useState<string>('ALL');
+  const [selectedSectionFilter, setSelectedSectionFilter] = useState<string>('ALL');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<'ALL' | 'APPROVED' | 'PENDING'>('ALL');
   const [selectedStudentUids, setSelectedStudentUids] = useState<string[]>([]);
   const [isDeletingStudents, setIsDeletingStudents] = useState(false);
@@ -89,27 +91,34 @@ export const AdminDashboard: React.FC = () => {
     return users.filter(u => u.role === 'student');
   }, [users]);
 
-  // Available branches from registered students
+  // Available academic groups are derived from the roster, so new branch and
+  // section values appear without a code change.
   const availableStudentBranches = useMemo(() => {
     const set = new Set<string>(['ALL']);
     allStudents.forEach(st => {
-      const b = (st.branch || '').trim().toUpperCase();
+      const b = normalizeAcademicValue(st.branch);
       if (b) set.add(b);
     });
-    ['CSE', 'CSM', 'AI', 'DS'].forEach(b => set.add(b));
     return Array.from(set);
   }, [allStudents]);
+
+  const availableStudentSections = useMemo(() => {
+    const set = new Set<string>(['ALL']);
+    allStudents.forEach(st => {
+      if (selectedBranchFilter !== 'ALL' && normalizeAcademicValue(st.branch) !== selectedBranchFilter) return;
+      const section = normalizeAcademicValue(st.section);
+      if (section) set.add(section);
+    });
+    return Array.from(set);
+  }, [allStudents, selectedBranchFilter]);
 
   const filteredStudents = useMemo(() => {
     return allStudents.filter(st => {
       // Branch filter
       if (selectedBranchFilter !== 'ALL') {
-        const b = (st.branch || '').trim().toUpperCase();
-        const target = selectedBranchFilter.trim().toUpperCase();
-        if (b !== target && !b.includes(target) && !target.includes(b)) {
-          return false;
-        }
+        if (normalizeAcademicValue(st.branch) !== selectedBranchFilter) return false;
       }
+      if (selectedSectionFilter !== 'ALL' && normalizeAcademicValue(st.section) !== selectedSectionFilter) return false;
       // Status filter
       if (selectedStatusFilter !== 'ALL') {
         const s = (st.status || 'approved').toUpperCase();
@@ -122,11 +131,12 @@ export const AdminDashboard: React.FC = () => {
         const matchName = (st.name || '').toLowerCase().includes(q);
         const matchEmail = (st.email || '').toLowerCase().includes(q);
         const matchHT = (st.hallTicketNo || '').toLowerCase().includes(q);
-        if (!matchName && !matchEmail && !matchHT) return false;
+        const matchAcademic = `${st.branch || ''} ${st.section || ''}`.toLowerCase().includes(q);
+        if (!matchName && !matchEmail && !matchHT && !matchAcademic) return false;
       }
       return true;
     });
-  }, [allStudents, selectedBranchFilter, selectedStatusFilter, studentSearch]);
+  }, [allStudents, selectedBranchFilter, selectedSectionFilter, selectedStatusFilter, studentSearch]);
 
   const handleSelectAllStudents = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.checked) {
@@ -587,22 +597,44 @@ export const AdminDashboard: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-2 flex-wrap text-xs">
-              {/* Branch Filter Pills */}
+              {/* Branch filter */}
               <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200 dark:border-slate-700 overflow-x-auto max-w-full">
-                {availableStudentBranches.map(b => (
-                  <button
-                    key={b}
-                    onClick={() => setSelectedBranchFilter(b)}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition font-heading whitespace-nowrap ${
-                      selectedBranchFilter === b
-                        ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
-                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                    }`}
-                  >
-                    {b === 'ALL' ? 'All Branches' : b}
-                  </button>
-                ))}
+                {availableStudentBranches.map(b => {
+                  const count = b === 'ALL'
+                    ? allStudents.length
+                    : allStudents.filter(student => normalizeAcademicValue(student.branch) === b).length;
+                  return (
+                    <button
+                      key={b}
+                      onClick={() => { setSelectedBranchFilter(b); setSelectedSectionFilter('ALL'); }}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition font-heading whitespace-nowrap ${
+                        selectedBranchFilter === b
+                          ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
+                          : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      {b === 'ALL' ? 'All branches' : b} <span className="ml-1 opacity-60">{count}</span>
+                    </button>
+                  );
+                })}
               </div>
+
+              <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                Section
+                <select
+                  value={selectedSectionFilter}
+                  onChange={e => setSelectedSectionFilter(e.target.value)}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-white"
+                >
+                  {availableStudentSections.map(section => {
+                    const count = allStudents.filter(student =>
+                      (selectedBranchFilter === 'ALL' || normalizeAcademicValue(student.branch) === selectedBranchFilter) &&
+                      (section === 'ALL' || normalizeAcademicValue(student.section) === section)
+                    ).length;
+                    return <option key={section} value={section}>{section === 'ALL' ? `All sections (${count})` : `Section ${section} (${count})`}</option>;
+                  })}
+                </select>
+              </label>
 
               {/* Status Filter Pills */}
               <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200 dark:border-slate-700">
@@ -623,6 +655,14 @@ export const AdminDashboard: React.FC = () => {
             </div>
           </div>
 
+          <div className="px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 bg-slate-50/80 dark:bg-slate-900/40 border-b border-slate-200 dark:border-slate-800 text-[11px]">
+            <span className="font-semibold text-slate-700 dark:text-slate-200">
+              {selectedBranchFilter === 'ALL' ? 'All branches' : selectedBranchFilter}
+              {selectedSectionFilter !== 'ALL' ? ` · Section ${selectedSectionFilter}` : ' · All sections'}
+            </span>
+            <span className="text-slate-500 dark:text-slate-400">{filteredStudents.length} students in this view</span>
+          </div>
+
           {/* Student Table */}
           <div className="overflow-x-auto max-h-[520px]">
             <table className="w-full text-left border-collapse">
@@ -639,7 +679,8 @@ export const AdminDashboard: React.FC = () => {
                   <th className="p-3">Student Name</th>
                   <th className="p-3">Hall Ticket No</th>
                   <th className="p-3">Email</th>
-                  <th className="p-3">Branch / Sec</th>
+                  <th className="p-3">Branch</th>
+                  <th className="p-3">Section</th>
                   <th className="p-3">Biometrics</th>
                   <th className="p-3">Status</th>
                   <th className="p-3 text-right">Actions</th>
@@ -682,7 +723,12 @@ export const AdminDashboard: React.FC = () => {
                           {student.email}
                         </td>
                         <td className="p-3 text-slate-700 dark:text-slate-300 font-semibold font-mono">
-                          {student.branch || 'CSE'} - {student.section || 'A'}
+                          {normalizeAcademicValue(student.branch) || 'Unassigned'}
+                        </td>
+                        <td className="p-3">
+                          <span className="inline-flex px-2 py-1 rounded-md bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-900 font-semibold">
+                            {normalizeAcademicValue(student.section) ? `Section ${normalizeAcademicValue(student.section)}` : 'Unassigned'}
+                          </span>
                         </td>
                         <td className="p-3">
                           <span

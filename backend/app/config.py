@@ -115,6 +115,12 @@ if not _is_running_in_container():
     elif "@redis:" in REDIS_URL:
         REDIS_URL = REDIS_URL.replace("@redis:", "@localhost:")
 
+# Redis connection pooling & resilience settings
+REDIS_MAX_CONNECTIONS = int(os.getenv("REDIS_MAX_CONNECTIONS", "50"))
+REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", "3.0"))
+REDIS_CONNECT_TIMEOUT = float(os.getenv("REDIS_CONNECT_TIMEOUT", "2.0"))
+REDIS_COOLDOWN_SECONDS = float(os.getenv("REDIS_COOLDOWN_SECONDS", "15.0"))
+
 # ---------------------------------------------------------------------------
 # SMTP configuration (supports Brevo or standard SMTP variables in Coolify)
 # ---------------------------------------------------------------------------
@@ -162,6 +168,8 @@ BREVO_SMTP_USE_SSL = (
     or os.getenv("SMTP_SECURE", "").lower() in ("true", "1", "yes", "ssl")
     or BREVO_SMTP_PORT == 465
 )
+if IS_PRODUCTION and (not BREVO_SMTP_LOGIN or not BREVO_SMTP_KEY or not BREVO_FROM_EMAIL):
+    raise RuntimeError("CRITICAL SECURITY ERROR: SMTP credentials and BREVO_FROM_EMAIL are required in production.")
 
 # ---------------------------------------------------------------------------
 # Security Secrets — MUST be overridden in production
