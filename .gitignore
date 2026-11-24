@@ -130,3 +130,8 @@ docker-compose.override.yml
 
 # Isolated security verification environment
 backend/.venv-security/
+
+# Test suites ignored from git tracking
+backend/tests/
+tests/
+

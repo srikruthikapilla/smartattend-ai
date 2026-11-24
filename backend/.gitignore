@@ -52,3 +52,5 @@ htmlcov/
 logs/
 .vscode/
 .idea/
+tests/
+

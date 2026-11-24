@@ -908,7 +908,7 @@ def request_password_reset(request: Request, response: Response, payload: Reques
         raise HTTPException(status_code=503, detail="Verification service is temporarily unavailable. Please try again later.")
 
     # Send email via Brevo SMTP
-    if not send_otp_email(clean_email, user.name, otp_code):
+    if not send_otp_email(clean_email, user.name, otp_code, purpose="reset"):
         raise HTTPException(status_code=503, detail="Unable to dispatch verification code. Please try again later.")
 
     return {
@@ -1040,7 +1040,7 @@ def request_student_enrollment_otp(
         raise HTTPException(status_code=503, detail="Verification service is temporarily unavailable. Please try again later.")
 
     # Send email via Brevo SMTP
-    if not send_otp_email(student.email, student.name, otp_code):
+    if not send_otp_email(student.email, student.name, otp_code, purpose="enrollment"):
         raise HTTPException(status_code=503, detail="Unable to dispatch verification code. Please try again later.")
 
     logger.info(f"[Enrollment OTP] Sent enrollment OTP for {clean_ht} to {student.email}")

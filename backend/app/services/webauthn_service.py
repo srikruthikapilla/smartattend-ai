@@ -149,7 +149,7 @@ def verify_registration_response(
         challenge_key = client_data.get("challenge", "")
     except Exception:
         challenge_key = ""
-    stored_challenge = pop_challenge(f"reg:{user_id}:{challenge_key}")
+    stored_challenge = pop_challenge(f"reg:{user_id}:{challenge_key}") or pop_challenge(f"reg:{user_id}")
     if not stored_challenge:
         return False, {"error": "WebAuthn registration challenge expired or not found. Please try again."}
 
@@ -223,7 +223,7 @@ def verify_authentication_response(
         challenge_key = client_data.get("challenge", "")
     except Exception:
         challenge_key = ""
-    stored_challenge = pop_challenge(f"auth:{user_id}:{challenge_key}")
+    stored_challenge = pop_challenge(f"auth:{user_id}:{challenge_key}") or pop_challenge(f"auth:{user_id}")
     if not stored_challenge:
         return False, {"error": "WebAuthn authentication challenge expired or already consumed."}
 
