@@ -482,7 +482,9 @@ export const PublicCheckin: React.FC = () => {
         setStep('location_error');
         return;
       }
-      if (accuracy > 100) {
+      // Accuracy is an estimate. Keep the client-side threshold aligned with
+      // the session boundary instead of rejecting normal desktop/Wi-Fi fixes.
+      if (accuracy > sessionRadius) {
         setErrorMessage(`GPS accuracy is too low (${Math.round(accuracy)}m). Move outdoors or near a window and retry.`);
         setStep('location_error');
         return;

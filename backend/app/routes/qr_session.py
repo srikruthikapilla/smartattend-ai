@@ -68,7 +68,7 @@ def start_qr_session(payload: QRSessionStartPayload,
         session_title=payload.sessionTitle, branch=payload.branch, section=payload.section,
         room=payload.room, start_time=now,
         end_time=now + timedelta(minutes=payload.durationMinutes), status="active",
-        radius_meters=200,
+        radius_meters=payload.radiusMeters,
         geofence={"lat": payload.latitude, "lng": payload.longitude})
     db.add(session)
     db.commit()

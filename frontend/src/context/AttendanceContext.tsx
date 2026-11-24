@@ -364,7 +364,9 @@ export const AttendanceProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
     const sessionLat = data.latitude!;
     const sessionLng = data.longitude!;
-    const sessionRadius = 200;
+    const sessionRadius = Number.isFinite(data.radiusMeters) && (data.radiusMeters ?? 0) > 0
+      ? Math.round(data.radiusMeters!)
+      : 200;
 
     const dynamicGeofence: GeofenceConfig = {
       latitude: sessionLat,

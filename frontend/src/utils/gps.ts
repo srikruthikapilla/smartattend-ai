@@ -18,7 +18,10 @@ export function getCurrentLocation(): Promise<LocationCoordinates> {
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude, accuracy } = position.coords;
-        if (![latitude, longitude, accuracy].every(Number.isFinite) || accuracy < 0 || accuracy > 100) {
+        // Browser geolocation accuracy is an estimate, not the distance from the
+        // campus anchor. Desktop Wi-Fi/IP location commonly reports 100-200m.
+        // Reject only readings that are too coarse for the attendance radius.
+        if (![latitude, longitude, accuracy].every(Number.isFinite) || accuracy < 0 || accuracy > 200) {
           reject(new Error('Your device cannot locate you accurately enough for a 200m attendance session. Enable precise location and retry near a window, or start the session from a GPS-enabled phone.'));
           return;
         }
@@ -47,8 +50,8 @@ export function getCurrentLocation(): Promise<LocationCoordinates> {
       },
       {
         enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0,
+        timeout: 20000,
+        maximumAge: 30000,
       }
     );
   });
