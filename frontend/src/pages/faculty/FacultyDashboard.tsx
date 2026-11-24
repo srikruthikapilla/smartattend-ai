@@ -36,7 +36,10 @@ export const FacultyDashboard: React.FC = () => {
     setIsStartingSession(true);
 
     try {
-    const location = await getCurrentLocation();
+    const location = await getCurrentLocation().catch(error => {
+      alert(error instanceof Error ? error.message : 'Could not obtain an accurate faculty location.');
+      throw error;
+    });
     await startSession({
       sessionTitle: `${currentUser.department || "Machine Learning"} Lecture Session`,
       facultyId: currentUser.uid,

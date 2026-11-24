@@ -472,7 +472,7 @@ export const PublicCheckin: React.FC = () => {
       setDistanceMeters(distance);
 
       if (distance > sessionRadius) {
-        setErrorMessage(`Outside allowed radius: ${distance}m from session center (allowed: ${sessionRadius}m).`);
+        setErrorMessage(`Your reported location is ${distance}m from the faculty location saved when this session started (allowed: ${sessionRadius}m). If you are beside the faculty, ask them to end this session and start a new one with precise location enabled, preferably on a GPS-enabled phone. Then scan the new QR code.`);
         setStep('location_error');
         return;
       }

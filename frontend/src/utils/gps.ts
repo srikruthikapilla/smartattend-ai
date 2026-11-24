@@ -17,6 +17,11 @@ export function getCurrentLocation(): Promise<LocationCoordinates> {
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        const { latitude, longitude, accuracy } = position.coords;
+        if (![latitude, longitude, accuracy].every(Number.isFinite) || accuracy < 0 || accuracy > 100) {
+          reject(new Error('Your device cannot locate you accurately enough for a 200m attendance session. Enable precise location and retry near a window, or start the session from a GPS-enabled phone.'));
+          return;
+        }
         resolve({
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
