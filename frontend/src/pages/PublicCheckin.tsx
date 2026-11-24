@@ -444,9 +444,31 @@ export const PublicCheckin: React.FC = () => {
   };
 
   // 6. Geolocation (Seamless & Non-Intrusive — Dynamic Session Baseline)
-  const verifyLocation = () => {
+  const verifyLocation = async () => {
     setCurrentCoords(null);
     setStep('location_check');
+    let centerLat: number, centerLng: number, sessionRadius: number;
+    try {
+      if (!token) throw new Error('Scan the current faculty QR code to load the session location.');
+      // Refresh on retries too: another GPS reading cannot repair missing session data.
+      const response = await fetch(`/api/checkin/session/${encodeURIComponent(token)}`, { cache: 'no-store' });
+      const data = await safeJson(response);
+      if (!response.ok || !data.valid) throw new Error(typeof data.detail === 'string' ? data.detail : 'Session expired. Scan the current faculty QR code.');
+      const latitude = data.geofence?.centerLat ?? data.session?.faculty_lat;
+      const longitude = data.geofence?.centerLng ?? data.session?.faculty_lng;
+      const radius = data.geofence?.radiusMeters ?? data.session?.radius_meters;
+      if ([latitude, longitude, radius].some(value => value == null || value === '')) throw new Error('This session has no saved faculty location. Ask the faculty to start a new session and scan its QR code.');
+      centerLat = Number(latitude);
+      centerLng = Number(longitude);
+      sessionRadius = Number(radius);
+      if (![centerLat, centerLng, sessionRadius].every(Number.isFinite) || Math.abs(centerLat) > 90 || Math.abs(centerLng) > 180 || sessionRadius <= 0) throw new Error('The session location is invalid. Ask the faculty to start a new session.');
+      setSessionData(data.session);
+      setGeofenceData(data.geofence);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Could not load the session location. Retry when connected.');
+      setStep('location_error');
+      return;
+    }
     if (!navigator.geolocation) {
       setErrorMessage('This browser does not support location verification.');
       setStep('location_error');
@@ -454,12 +476,9 @@ export const PublicCheckin: React.FC = () => {
     }
     navigator.geolocation.getCurrentPosition(pos => {
       const { latitude: lat, longitude: lng } = pos.coords;
-      const centerLat = Number(geofenceData?.centerLat ?? sessionData?.faculty_lat);
-      const centerLng = Number(geofenceData?.centerLng ?? sessionData?.faculty_lng);
-      const sessionRadius = Number(geofenceData?.radiusMeters ?? sessionData?.radius_meters ?? 150);
       const accuracy = Number(pos.coords.accuracy);
       if (![lat, lng, centerLat, centerLng, sessionRadius, accuracy].every(Number.isFinite)) {
-        setErrorMessage('Location verification data is incomplete. Please retry.');
+        setErrorMessage('Your device did not provide valid GPS coordinates or accuracy. Enable precise location and retry.');
         setStep('location_error');
         return;
       }
